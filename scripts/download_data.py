@@ -6,7 +6,7 @@ import os
 import logging
 import requests
 import pandas as pd
-from typing import None
+from typing import Optional
 from config.settings import settings
 from config.logging_config import setup_logging, get_logger
 

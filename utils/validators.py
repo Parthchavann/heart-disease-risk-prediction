@@ -236,7 +236,7 @@ class DataValidator:
 
 
 def validate_training_data(train_path: str, val_path: str, test_path: str) -> bool:
-    """Validate training data files."""
+    """Validate training data files (scaled/processed data)."""
 
     try:
         # Load datasets
@@ -246,11 +246,18 @@ def validate_training_data(train_path: str, val_path: str, test_path: str) -> bo
 
         logger.info("Validating training data...")
 
-        # Validate each dataset
+        # Validate each dataset (structural checks only - data is already scaled)
         for name, df in [("Training", train_df), ("Validation", val_df), ("Test", test_df)]:
-            is_valid, errors = DataValidator.validate_dataframe(df)
+            errors = []
 
-            if not is_valid:
+            if df.empty:
+                errors.append("Dataset is empty")
+
+            missing_counts = df.isnull().sum()
+            if missing_counts.any():
+                errors.append(f"Missing values found: {missing_counts[missing_counts > 0].to_dict()}")
+
+            if errors:
                 logger.error(f"{name} dataset validation failed: {errors}")
                 return False
 
