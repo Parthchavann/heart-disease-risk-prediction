@@ -30,6 +30,14 @@ except ImportError:
     XGBOOST_AVAILABLE = False
     xgb = None
 
+# LightGBM
+try:
+    import lightgbm as lgb
+    LIGHTGBM_AVAILABLE = True
+except ImportError:
+    LIGHTGBM_AVAILABLE = False
+    lgb = None
+
 from config.settings import settings
 from config.logging_config import get_logger
 
@@ -111,6 +119,23 @@ class ModelTrainer:
                 }
             }
 
+        # Add LightGBM if available
+        if LIGHTGBM_AVAILABLE:
+            configs['lightgbm'] = {
+                'model': lgb.LGBMClassifier(
+                    random_state=settings.RANDOM_STATE,
+                    verbose=-1
+                ),
+                'params': {
+                    'n_estimators': [50, 100, 200],
+                    'max_depth': [3, 5, 7, -1],
+                    'learning_rate': [0.01, 0.05, 0.1],
+                    'num_leaves': [15, 31, 63],
+                    'subsample': [0.8, 0.9, 1.0],
+                    'colsample_bytree': [0.8, 0.9, 1.0]
+                }
+            }
+
         return configs
 
     def load_training_data(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -134,19 +159,19 @@ class ModelTrainer:
         return train_df, val_df, test_df
 
     def prepare_data_for_training(self, train_df: pd.DataFrame, val_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """Prepare data for training by separating features and targets."""
+        """Prepare data for training by separating features and targets.
 
-        # Combine training and validation for hyperparameter tuning
-        combined_df = pd.concat([train_df, val_df], axis=0, ignore_index=True)
+        Only train_df is used for fitting — val_df is held out for honest model selection.
+        """
 
-        X = combined_df.drop('target', axis=1).values
-        y = combined_df['target'].values
+        X = train_df.drop('target', axis=1).values
+        y = train_df['target'].values
 
-        # Also prepare validation set separately for final evaluation
         X_val = val_df.drop('target', axis=1).values
         y_val = val_df['target'].values
 
-        logger.info(f"Prepared data for training: X shape {X.shape}, y distribution {np.bincount(y)}")
+        logger.info(f"Training set: X={X.shape}, y distribution={np.bincount(y.astype(int))}")
+        logger.info(f"Validation set: X_val={X_val.shape}")
 
         return X, y, X_val, y_val
 
@@ -329,6 +354,7 @@ class ModelTrainer:
             'training_timestamp': timestamp,
             'model_file': model_filename,
             'metrics': metrics,
+            'optimal_threshold': metrics.get('optimal_threshold', 0.5),
             'feature_importance': self.get_feature_importance(model, feature_names),
             'training_config': {
                 'random_state': settings.RANDOM_STATE,
@@ -354,6 +380,67 @@ class ModelTrainer:
         logger.info(f"Metadata saved: {metadata_path}")
 
         return model_path
+
+    def build_stacking_ensemble(self, tuned_results: Dict[str, Any],
+                                X: np.ndarray, y: np.ndarray,
+                                X_val: np.ndarray, y_val: np.ndarray) -> Dict[str, Any]:
+        """Build a stacking ensemble from the top tuned base learners."""
+
+        from sklearn.ensemble import StackingClassifier
+
+        # Pick the top-3 base estimators by CV score
+        sorted_models = sorted(
+            tuned_results.items(),
+            key=lambda kv: kv[1]['best_score'],
+            reverse=True
+        )[:3]
+
+        estimators = [(name, res['best_estimator']) for name, res in sorted_models]
+        logger.info(f"Stacking base learners: {[n for n, _ in estimators]}")
+
+        meta_learner = LogisticRegression(random_state=settings.RANDOM_STATE, max_iter=1000)
+        stack = StackingClassifier(
+            estimators=estimators,
+            final_estimator=meta_learner,
+            cv=StratifiedKFold(n_splits=settings.CV_FOLDS, shuffle=True,
+                               random_state=settings.RANDOM_STATE),
+            passthrough=False,
+            n_jobs=-1
+        )
+        stack.fit(X, y)
+
+        val_metrics = self.evaluate_model(stack, X_val, y_val)
+        cv_score = cross_val_score(
+            stack, X, y,
+            cv=StratifiedKFold(n_splits=settings.CV_FOLDS, shuffle=True,
+                               random_state=settings.RANDOM_STATE),
+            scoring='roc_auc', n_jobs=-1
+        ).mean()
+
+        logger.info(f"Stacking ensemble — val ROC-AUC: {val_metrics['roc_auc']:.4f}, "
+                    f"CV ROC-AUC: {cv_score:.4f}")
+
+        return {
+            'best_estimator': stack,
+            'best_params': {'base_learners': [n for n, _ in estimators]},
+            'best_score': cv_score,
+            'val_metrics': val_metrics
+        }
+
+    def optimize_threshold(self, model: Any, X_val: np.ndarray, y_val: np.ndarray) -> float:
+        """Find the decision threshold that maximises Youden's J (sensitivity + specificity - 1)."""
+
+        from sklearn.metrics import roc_curve
+
+        y_proba = model.predict_proba(X_val)[:, 1]
+        fpr, tpr, thresholds = roc_curve(y_val, y_proba)
+        youdens_j = tpr - fpr
+        best_idx = np.argmax(youdens_j)
+        best_threshold = float(thresholds[best_idx])
+
+        logger.info(f"Optimal threshold (Youden's J): {best_threshold:.4f} "
+                    f"— sensitivity={tpr[best_idx]:.4f}, specificity={1-fpr[best_idx]:.4f}")
+        return best_threshold
 
     def optuna_tune_xgboost(self, X: np.ndarray, y: np.ndarray,
                             X_val: np.ndarray, y_val: np.ndarray,
@@ -382,7 +469,6 @@ class ModelTrainer:
                 'gamma':             trial.suggest_float('gamma', 0, 5),
                 'random_state':      settings.RANDOM_STATE,
                 'eval_metric':       'logloss',
-                'use_label_encoder': False,
             }
             model = xgb.XGBClassifier(**params)
             scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc', n_jobs=-1)
@@ -394,7 +480,7 @@ class ModelTrainer:
 
         best_params = study.best_params
         best_params.update({'random_state': settings.RANDOM_STATE,
-                            'eval_metric': 'logloss', 'use_label_encoder': False})
+                            'eval_metric': 'logloss'})
 
         logger.info(f"Optuna best CV ROC-AUC: {study.best_value:.4f}")
         logger.info(f"Optuna best params: {best_params}")
@@ -441,12 +527,34 @@ class ModelTrainer:
                             f"({grid_val_auc:.4f}) — using Optuna model.")
                 best_model = optuna_result['best_estimator']
                 best_model_name = 'xgboost_optuna'
+                tuned_results['xgboost_optuna'] = optuna_result
             else:
                 logger.info(f"GridSearch best ({grid_val_auc:.4f}) >= Optuna "
                             f"({optuna_val_auc:.4f}) — keeping GridSearch model.")
 
+        # Stacking ensemble (Step 5)
+        try:
+            stack_result = self.build_stacking_ensemble(tuned_results, X, y, X_val, y_val)
+            stack_val_auc = stack_result['val_metrics']['roc_auc']
+            current_val_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
+            if stack_val_auc > current_val_auc:
+                logger.info(f"Stacking ({stack_val_auc:.4f}) beats current best "
+                            f"({current_val_auc:.4f}) — using stacking ensemble.")
+                best_model = stack_result['best_estimator']
+                best_model_name = 'stacking_ensemble'
+            else:
+                logger.info(f"Current best ({current_val_auc:.4f}) >= stacking "
+                            f"({stack_val_auc:.4f}) — keeping current model.")
+        except Exception as e:
+            logger.warning(f"Stacking ensemble failed: {e}")
+
+        # Threshold optimisation (Step 6) — find Youden-optimal threshold and log it
+        optimal_threshold = self.optimize_threshold(best_model, X_val, y_val)
+        logger.info(f"Optimal decision threshold: {optimal_threshold:.4f} (default 0.5)")
+
         # Get final validation metrics
         final_metrics = self.evaluate_model(best_model, X_val, y_val)
+        final_metrics['optimal_threshold'] = optimal_threshold
 
         # Capture feature names from training data for proper importance labelling
         feature_names = [c for c in train_df.columns if c != 'target']

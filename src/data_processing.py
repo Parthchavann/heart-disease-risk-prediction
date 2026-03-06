@@ -95,30 +95,28 @@ class DataProcessor:
         return df_clean
 
     def _remove_outliers(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Remove outliers using IQR method."""
+        """Clip numerical features to medically valid hard bounds.
 
-        df_no_outliers = df.copy()
-        initial_rows = len(df_no_outliers)
+        Uses domain-specific ranges instead of statistical IQR removal so that
+        patients from non-Cleveland populations (different distributions) are
+        retained. Values outside the bounds are clipped, not dropped.
+        """
+        from utils.constants import FEATURE_RANGES
+
+        df_clipped = df.copy()
 
         for feature in NUMERICAL_FEATURES:
-            if feature in df_no_outliers.columns:
-                Q1 = df_no_outliers[feature].quantile(0.25)
-                Q3 = df_no_outliers[feature].quantile(0.75)
-                IQR = Q3 - Q1
+            if feature in df_clipped.columns and feature in FEATURE_RANGES:
+                lo = FEATURE_RANGES[feature]['min']
+                hi = FEATURE_RANGES[feature]['max']
+                clipped = df_clipped[feature].clip(lo, hi)
+                changed = (clipped != df_clipped[feature]).sum()
+                if changed:
+                    logger.info(f"Clipped {changed} out-of-range values in '{feature}' to [{lo}, {hi}]")
+                df_clipped[feature] = clipped
 
-                # Define outlier bounds
-                lower_bound = Q1 - 1.5 * IQR
-                upper_bound = Q3 + 1.5 * IQR
-
-                # Remove outliers
-                mask = (df_no_outliers[feature] >= lower_bound) & (df_no_outliers[feature] <= upper_bound)
-                df_no_outliers = df_no_outliers[mask]
-
-        removed_rows = initial_rows - len(df_no_outliers)
-        if removed_rows > 0:
-            logger.info(f"Removed {removed_rows} outliers ({removed_rows/initial_rows:.1%} of data)")
-
-        return df_no_outliers
+        logger.info(f"Outlier clipping complete — retained all {len(df_clipped)} rows")
+        return df_clipped
 
     def _validate_feature_ranges(self, df: pd.DataFrame) -> pd.DataFrame:
         """Validate that features are within expected ranges."""

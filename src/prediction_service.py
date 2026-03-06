@@ -135,14 +135,21 @@ class HeartDiseasePredictionService:
         return processed_data
 
     def make_prediction(self, X: np.ndarray) -> Tuple[int, float, np.ndarray]:
-        """Make prediction using the trained model."""
+        """Make prediction using the trained model.
 
-        # Get prediction and probability
-        prediction = self.model.predict(X)[0]
+        Uses the Youden-optimal threshold from training metadata when available,
+        falling back to 0.5 otherwise.
+        """
+
         prediction_proba = self.model.predict_proba(X)[0]
-        risk_probability = prediction_proba[1]  # Probability of positive class
+        risk_probability = float(prediction_proba[1])
 
-        logger.info(f"Prediction made: {prediction}, Risk probability: {risk_probability:.3f}")
+        # Use Youden-optimal threshold if stored in metadata
+        threshold = self.model_metadata.get('optimal_threshold', 0.5)
+        prediction = int(risk_probability >= threshold)
+
+        logger.info(f"Prediction made: {prediction} (threshold={threshold:.3f}), "
+                    f"Risk probability: {risk_probability:.3f}")
 
         return prediction, risk_probability, prediction_proba
 

@@ -28,6 +28,35 @@ UCI_DATASETS = {
 }
 
 
+def normalize_encodings(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalise feature encodings to 0-indexed Cleveland standard.
+
+    Raw UCI files use 1-indexed values for several fields:
+      cp    : 1-4  →  0-3  (subtract 1 if any value > 3)
+      slope : 1-3  →  0-2  (subtract 1 if any value > 2)
+      thal  : Cleveland uses 3/6/7; others may use 1/2/3 or 0/1/2
+               Map 3→0 (normal), 6→1 (fixed), 7→2 (reversible)
+               If already in 0-3 range leave untouched.
+    """
+    df = df.copy()
+
+    # cp: 1-4 → 0-3
+    if pd.to_numeric(df['cp'], errors='coerce').max() > 3:
+        df['cp'] = pd.to_numeric(df['cp'], errors='coerce') - 1
+
+    # slope: 1-3 → 0-2
+    if pd.to_numeric(df['slope'], errors='coerce').max() > 2:
+        df['slope'] = pd.to_numeric(df['slope'], errors='coerce') - 1
+
+    # thal: 3/6/7 → 0/1/2 (Cleveland original encoding)
+    thal_num = pd.to_numeric(df['thal'], errors='coerce')
+    if thal_num.isin([6, 7]).any():
+        thal_map = {3: 0, 6: 1, 7: 2}
+        df['thal'] = thal_num.map(thal_map).fillna(thal_num)
+
+    return df
+
+
 def download_single_dataset(name: str, url: str) -> Optional[pd.DataFrame]:
     """Download one UCI dataset and return as DataFrame."""
     file_path = os.path.join(settings.RAW_DATA_DIR, f"heart_disease_{name}.data")
@@ -49,6 +78,7 @@ def download_single_dataset(name: str, url: str) -> Optional[pd.DataFrame]:
     try:
         df = pd.read_csv(file_path, header=None, names=COLUMN_NAMES)
         df = df.replace('?', pd.NA)
+        df = normalize_encodings(df)
         df['source'] = name
         logger.info(f"  {name}: {len(df)} rows loaded")
         return df
