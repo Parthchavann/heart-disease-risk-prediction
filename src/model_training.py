@@ -33,6 +33,14 @@ except ImportError:
 from config.settings import settings
 from config.logging_config import get_logger
 
+try:
+    import optuna
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    OPTUNA_AVAILABLE = True
+except ImportError:
+    OPTUNA_AVAILABLE = False
+    optuna = None
+
 logger = get_logger(__name__)
 
 
@@ -299,7 +307,8 @@ class ModelTrainer:
 
         return importance_dict
 
-    def save_model(self, model: Any, model_name: str, metrics: Dict[str, Any]) -> str:
+    def save_model(self, model: Any, model_name: str, metrics: Dict[str, Any],
+                   feature_names: List[str] = None) -> str:
         """Save the trained model and its metadata."""
 
         # Create models directory
@@ -320,7 +329,7 @@ class ModelTrainer:
             'training_timestamp': timestamp,
             'model_file': model_filename,
             'metrics': metrics,
-            'feature_importance': self.get_feature_importance(model),
+            'feature_importance': self.get_feature_importance(model, feature_names),
             'training_config': {
                 'random_state': settings.RANDOM_STATE,
                 'cv_folds': settings.CV_FOLDS
@@ -346,6 +355,64 @@ class ModelTrainer:
 
         return model_path
 
+    def optuna_tune_xgboost(self, X: np.ndarray, y: np.ndarray,
+                            X_val: np.ndarray, y_val: np.ndarray,
+                            n_trials: int = 100) -> Dict[str, Any]:
+        """Tune XGBoost using Optuna Bayesian optimisation."""
+
+        if not OPTUNA_AVAILABLE or not XGBOOST_AVAILABLE:
+            logger.warning("Optuna or XGBoost not available — skipping Optuna tuning.")
+            return {}
+
+        logger.info(f"Starting Optuna tuning for XGBoost ({n_trials} trials)...")
+
+        cv = StratifiedKFold(n_splits=settings.CV_FOLDS, shuffle=True,
+                             random_state=settings.RANDOM_STATE)
+
+        def objective(trial):
+            params = {
+                'n_estimators':      trial.suggest_int('n_estimators', 50, 500),
+                'max_depth':         trial.suggest_int('max_depth', 2, 8),
+                'learning_rate':     trial.suggest_float('learning_rate', 0.005, 0.3, log=True),
+                'subsample':         trial.suggest_float('subsample', 0.6, 1.0),
+                'colsample_bytree':  trial.suggest_float('colsample_bytree', 0.6, 1.0),
+                'reg_alpha':         trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
+                'reg_lambda':        trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+                'min_child_weight':  trial.suggest_int('min_child_weight', 1, 10),
+                'gamma':             trial.suggest_float('gamma', 0, 5),
+                'random_state':      settings.RANDOM_STATE,
+                'eval_metric':       'logloss',
+                'use_label_encoder': False,
+            }
+            model = xgb.XGBClassifier(**params)
+            scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc', n_jobs=-1)
+            return scores.mean()
+
+        study = optuna.create_study(direction='maximize',
+                                    sampler=optuna.samplers.TPESampler(seed=settings.RANDOM_STATE))
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+        best_params = study.best_params
+        best_params.update({'random_state': settings.RANDOM_STATE,
+                            'eval_metric': 'logloss', 'use_label_encoder': False})
+
+        logger.info(f"Optuna best CV ROC-AUC: {study.best_value:.4f}")
+        logger.info(f"Optuna best params: {best_params}")
+
+        # Train final model on full data with best params
+        best_model = xgb.XGBClassifier(**best_params)
+        best_model.fit(X, y)
+
+        val_metrics = self.evaluate_model(best_model, X_val, y_val)
+        logger.info(f"Optuna XGBoost validation metrics: {val_metrics}")
+
+        return {
+            'best_estimator': best_model,
+            'best_params': best_params,
+            'best_score': study.best_value,
+            'val_metrics': val_metrics,
+        }
+
     def train_complete_pipeline(self) -> Dict[str, Any]:
         """Execute the complete training pipeline."""
 
@@ -358,17 +425,35 @@ class ModelTrainer:
         # Train baseline models
         baseline_results = self.train_baseline_models(X, y)
 
-        # Hyperparameter tuning
+        # Hyperparameter tuning (GridSearchCV for all models)
         tuned_results = self.hyperparameter_tuning(X, y)
 
-        # Select best model
+        # Select best model from GridSearchCV results
         best_model, best_model_name = self.select_best_model(tuned_results, X_val, y_val)
+
+        # Optuna tuning for XGBoost (Bayesian search — finds better params)
+        optuna_result = self.optuna_tune_xgboost(X, y, X_val, y_val, n_trials=100)
+        if optuna_result:
+            optuna_val_auc = optuna_result['val_metrics']['roc_auc']
+            grid_val_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
+            if optuna_val_auc > grid_val_auc:
+                logger.info(f"Optuna XGBoost ({optuna_val_auc:.4f}) beats GridSearch best "
+                            f"({grid_val_auc:.4f}) — using Optuna model.")
+                best_model = optuna_result['best_estimator']
+                best_model_name = 'xgboost_optuna'
+            else:
+                logger.info(f"GridSearch best ({grid_val_auc:.4f}) >= Optuna "
+                            f"({optuna_val_auc:.4f}) — keeping GridSearch model.")
 
         # Get final validation metrics
         final_metrics = self.evaluate_model(best_model, X_val, y_val)
 
-        # Save best model
-        model_path = self.save_model(best_model, best_model_name, final_metrics)
+        # Capture feature names from training data for proper importance labelling
+        feature_names = [c for c in train_df.columns if c != 'target']
+
+        # Save best model (pass feature names so importance dict uses real names)
+        model_path = self.save_model(best_model, best_model_name, final_metrics,
+                                     feature_names=feature_names)
 
         # Store results
         self.best_model = best_model

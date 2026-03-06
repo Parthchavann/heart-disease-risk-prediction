@@ -1,5 +1,7 @@
 """
 Script to download and prepare the UCI Heart Disease dataset.
+Downloads all 4 location datasets (Cleveland, Hungarian, Switzerland, VA Long Beach)
+and combines them for a larger, more representative training set (~920 samples).
 """
 
 import os
@@ -10,73 +12,77 @@ from typing import Optional
 from config.settings import settings
 from config.logging_config import setup_logging, get_logger
 
-# Initialize logging
 setup_logging()
 logger = get_logger(__name__)
 
+COLUMN_NAMES = [
+    'age', 'sex', 'cp', 'trestbps', 'chol', 'fbs', 'restecg',
+    'thalach', 'exang', 'oldpeak', 'slope', 'ca', 'thal', 'target'
+]
+
+UCI_DATASETS = {
+    'cleveland':  'https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data',
+    'hungarian':  'https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.hungarian.data',
+    'switzerland':'https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.switzerland.data',
+    'va':         'https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.va.data',
+}
+
+
+def download_single_dataset(name: str, url: str) -> Optional[pd.DataFrame]:
+    """Download one UCI dataset and return as DataFrame."""
+    file_path = os.path.join(settings.RAW_DATA_DIR, f"heart_disease_{name}.data")
+
+    if not os.path.exists(file_path):
+        logger.info(f"Downloading {name} dataset from {url}")
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            with open(file_path, 'w') as f:
+                f.write(response.text)
+            logger.info(f"Saved {name} dataset to {file_path}")
+        except Exception as e:
+            logger.error(f"Failed to download {name}: {e}")
+            return None
+    else:
+        logger.info(f"{name} dataset already exists, skipping download")
+
+    try:
+        df = pd.read_csv(file_path, header=None, names=COLUMN_NAMES)
+        df = df.replace('?', pd.NA)
+        df['source'] = name
+        logger.info(f"  {name}: {len(df)} rows loaded")
+        return df
+    except Exception as e:
+        logger.error(f"Failed to parse {name}: {e}")
+        return None
+
 
 def download_uci_heart_disease_data() -> None:
-    """Download the UCI Heart Disease dataset."""
-
-    # Create directories if they don't exist
+    """Download all 4 UCI Heart Disease datasets and combine into one CSV."""
     os.makedirs(settings.RAW_DATA_DIR, exist_ok=True)
 
-    # Define file path
-    file_path = os.path.join(settings.RAW_DATA_DIR, "heart_disease.data")
+    csv_path = os.path.join(settings.RAW_DATA_DIR, "heart_disease.csv")
 
-    # Check if file already exists
-    if os.path.exists(file_path):
-        logger.info(f"Dataset already exists at {file_path}")
-        return
+    frames = []
+    for name, url in UCI_DATASETS.items():
+        df = download_single_dataset(name, url)
+        if df is not None:
+            frames.append(df)
 
-    try:
-        logger.info(f"Downloading UCI Heart Disease dataset from {settings.UCI_HEART_DISEASE_URL}")
+    if not frames:
+        raise RuntimeError("Failed to download any dataset.")
 
-        # Download the dataset
-        response = requests.get(settings.UCI_HEART_DISEASE_URL, timeout=30)
-        response.raise_for_status()
+    combined = pd.concat(frames, ignore_index=True)
 
-        # Save the raw data
-        with open(file_path, 'w') as f:
-            f.write(response.text)
+    # Drop the helper 'source' column before saving
+    combined = combined.drop(columns=['source'])
 
-        logger.info(f"Dataset downloaded successfully to {file_path}")
+    combined.to_csv(csv_path, index=False)
 
-        # Create a CSV version with proper column names
-        create_csv_with_headers(file_path)
-
-    except Exception as e:
-        logger.error(f"Failed to download dataset: {str(e)}")
-        raise
-
-
-def create_csv_with_headers(data_file_path: str) -> None:
-    """Create a CSV file with proper column headers."""
-
-    # Define column names based on UCI documentation
-    column_names = [
-        'age', 'sex', 'cp', 'trestbps', 'chol', 'fbs', 'restecg',
-        'thalach', 'exang', 'oldpeak', 'slope', 'ca', 'thal', 'target'
-    ]
-
-    try:
-        # Read the raw data
-        df = pd.read_csv(data_file_path, header=None, names=column_names)
-
-        # Replace missing values marked as '?' with NaN
-        df = df.replace('?', pd.NA)
-
-        # Save as CSV with headers
-        csv_path = os.path.join(settings.RAW_DATA_DIR, "heart_disease.csv")
-        df.to_csv(csv_path, index=False)
-
-        logger.info(f"CSV file created with headers: {csv_path}")
-        logger.info(f"Dataset shape: {df.shape}")
-        logger.info(f"Missing values per column:\n{df.isnull().sum()}")
-
-    except Exception as e:
-        logger.error(f"Failed to create CSV with headers: {str(e)}")
-        raise
+    total = len(combined)
+    logger.info(f"Combined dataset saved: {csv_path}  ({total} rows from {len(frames)} locations)")
+    logger.info(f"Missing values per column:\n{combined.isnull().sum()}")
+    logger.info(f"Target distribution:\n{combined['target'].value_counts()}")
 
 
 if __name__ == "__main__":
