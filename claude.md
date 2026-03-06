@@ -440,7 +440,7 @@ Development:
 
 ---
 
-## ✅ Current Progress (as of 2026-03-05)
+## ✅ Current Progress (as of 2026-03-06)
 
 ### Completed
 - [x] Full project structure initialized
@@ -455,8 +455,11 @@ Development:
 - [x] FastAPI server with `/predict`, `/health`, `/model/info` endpoints
 - [x] Prediction pipeline end-to-end working (`success: true`)
 - [x] Personalised LLM disclaimer generated per prediction
-- [x] 13/13 basic tests passing
+- [x] **46/46 tests passing** (full test suite: all modules covered)
 - [x] Full pipeline script (`scripts/run_full_pipeline.py`) runs 8/8 steps
+- [x] Waterfall plot fixed — now uses explanation dict's shap_values directly
+- [x] Streamlit dashboard (`app.py`) — risk gauge, SHAP bar chart, LLM explanation
+- [x] Docker containerisation (`Dockerfile` + `docker-compose.yml`)
 
 ### Known Working State
 - **LLM Provider**: `ollama` with `gemma2:latest` (9.2B, Q4_0)
@@ -473,6 +476,10 @@ Development:
 - `age_group missing at fit time` — `pd.cut` categorical dtype converted to string before encoding
 - OpenAI v0.x API → v1.x migration (`ChatCompletion.create` → `chat.completions.create`)
 - `LLM_MODEL=gpt-4` → `gpt-4o` (gpt-4 not accessible on current plan)
+- `test_save_and_load_model` overwrites `best_model.pkl` — fixed by redirecting MODELS_DIR to tmp_path
+- Waterfall plot `ValueError: Explainer and SHAP values required` — fixed to use explanation dict
+- `test_predict_batch_empty` returned 200 — fixed with `min_length=1` on `patients` field
+- `test_init_without_api_key` failed when Ollama running — test now provider-aware
 
 ---
 
@@ -533,11 +540,7 @@ set PYTHONPATH=. && python scripts/run_full_pipeline.py
 
 ## 📋 Next Steps (Remaining Work)
 
-### Priority 1 — Fix & Verify
-- [ ] **End-to-end API test**: Confirm full JSON response with `success: true`, SHAP values, and Gemma-generated explanation via Swagger UI
-- [ ] **Waterfall plot fix**: `Could not create waterfall plot: Explainer and SHAP values required` — minor issue in `explainability.py`
-
-### Priority 2 — Production Switch (when ready)
+### Priority 1 — Production Switch (when ready)
 - [ ] **Switch LLM to Gemini**: Get free API key from https://aistudio.google.com → update `.env`:
   ```
   LLM_PROVIDER=gemini
@@ -545,27 +548,27 @@ set PYTHONPATH=. && python scripts/run_full_pipeline.py
   GEMINI_API_KEY=your-key-here
   ```
   Then run: `pip install google-generativeai`
-- [ ] **Install `google-generativeai`**: `pip install google-generativeai`
 
-### Priority 3 — Testing
-- [ ] Run full test suite (not just basic tests):
-  ```cmd
-  set PYTHONPATH=. && python -m pytest tests/ -v
-  ```
-- [ ] Fix any failures in `test_api.py`, `test_model_training.py`, etc.
-
-### Priority 4 — UI / Frontend
-- [ ] Build a simple web frontend (HTML form) or Streamlit dashboard for non-technical users
-- [ ] Display risk gauge, SHAP bar chart, and LLM explanation in a readable format
-
-### Priority 5 — Production Hardening
-- [ ] Docker containerisation (`Dockerfile` + `docker-compose.yml`)
+### Priority 2 — Production Hardening
 - [ ] Add response caching to reduce Gemma2 latency
-- [ ] Rate limiting on API endpoints
 - [ ] Switch to async Ollama calls so API doesn't block during LLM generation
 - [ ] Add model retraining script trigger via API endpoint
 
-### Priority 6 — Deployment
-- [ ] Deploy to cloud (AWS/GCP/Azure)
+### Priority 3 — Deployment
+- [ ] Deploy to cloud (AWS/GCP/Azure) using `Dockerfile` + `docker-compose.yml`
 - [ ] Set up CI/CD pipeline
 - [ ] Add Prometheus + Grafana monitoring
+
+### How to Run Streamlit Dashboard
+```cmd
+cd "C:\Users\Parth Chavan\heart-disease-risk-prediction"
+set PYTHONPATH=. && streamlit run app.py
+```
+Open: http://localhost:8501
+
+### How to Run with Docker
+```cmd
+docker-compose up --build
+```
+- API: http://localhost:8000/docs
+- Streamlit: http://localhost:8501
