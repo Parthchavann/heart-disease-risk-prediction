@@ -49,6 +49,7 @@ class ModelEvaluator:
             raise FileNotFoundError("Test data not found. Please run data processing first.")
 
         test_df = pd.read_csv(test_path)
+        self.feature_names = [c for c in test_df.columns if c != 'target']
         X_test = test_df.drop('target', axis=1).values
         y_test = test_df['target'].values
 
@@ -241,8 +242,8 @@ class ModelEvaluator:
 
         plt.figure(figsize=(10, 6))
         plt.title(f'Top {top_n} Feature Importances - {model_name}')
-        plt.bar(range(top_n), importances[indices])
-        plt.xticks(range(top_n), [feature_names[i] for i in indices], rotation=45, ha='right')
+        plt.bar(range(len(indices)), importances[indices])
+        plt.xticks(range(len(indices)), [feature_names[i] for i in indices], rotation=45, ha='right')
         plt.ylabel('Importance')
 
         plot_path = os.path.join(self.plots_dir, f'feature_importance_{model_name.lower()}.png')
@@ -304,7 +305,7 @@ class ModelEvaluator:
             'confusion_matrix': self.plot_confusion_matrix(y_test, y_pred, model_name),
             'roc_curve': self.plot_roc_curve(y_test, y_pred_proba, model_name),
             'pr_curve': self.plot_precision_recall_curve(y_test, y_pred_proba, model_name),
-            'feature_importance': self.plot_feature_importance(model, FEATURE_NAMES, model_name),
+            'feature_importance': self.plot_feature_importance(model, getattr(self, 'feature_names', FEATURE_NAMES), model_name),
             'threshold_analysis': self.plot_threshold_analysis(
                 threshold_analysis['threshold_analysis'], model_name
             )

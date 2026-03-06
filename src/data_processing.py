@@ -199,7 +199,13 @@ class DataProcessor:
                     features[feature] = self.label_encoders[feature].fit_transform(features[feature])
                 else:
                     if feature in self.label_encoders:
-                        features[feature] = self.label_encoders[feature].transform(features[feature])
+                        le = self.label_encoders[feature]
+                        # Handle unseen labels by mapping to nearest known class
+                        known = set(le.classes_)
+                        features[feature] = features[feature].apply(
+                            lambda v: le.transform([v])[0] if v in known
+                            else le.transform([min(le.classes_, key=lambda c: abs(c - v))])[0]
+                        )
 
         # Handle engineered categorical features
         if 'age_group' in features.columns:
@@ -209,7 +215,11 @@ class DataProcessor:
                 features['age_group'] = self.label_encoders['age_group'].fit_transform(features['age_group'])
             else:
                 if 'age_group' in self.label_encoders:
-                    features['age_group'] = self.label_encoders['age_group'].transform(features['age_group'])
+                    le = self.label_encoders['age_group']
+                    known = set(le.classes_)
+                    features['age_group'] = features['age_group'].apply(
+                        lambda v: le.transform([v])[0] if v in known else le.transform([le.classes_[0]])[0]
+                    )
 
         # Scale numerical features
         numerical_cols = features.select_dtypes(include=[np.number]).columns
@@ -321,6 +331,13 @@ class DataProcessor:
 
         # Create DataFrame from sample
         df = pd.DataFrame([sample_data])
+
+        # Apply feature engineering (same as training pipeline)
+        df = self.engineer_features(df)
+
+        # Convert categorical dtype to string to avoid LabelEncoder issues
+        if 'age_group' in df.columns:
+            df['age_group'] = df['age_group'].astype(str)
 
         # Apply the same preprocessing steps (without fitting)
         df_processed = self.preprocess_features(df, fit_transformers=False)

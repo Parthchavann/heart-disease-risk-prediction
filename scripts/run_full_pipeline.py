@@ -21,9 +21,15 @@ def run_command(command, description):
     logger.info(f"Starting: {description}")
     logger.info(f"Command: {command}")
 
+    # Pass PYTHONPATH and UTF-8 encoding to subprocesses
+    env = os.environ.copy()
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env["PYTHONPATH"] = project_root
+    env["PYTHONUTF8"] = "1"
+
     try:
         start_time = time.time()
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True, env=env)
         duration = time.time() - start_time
 
         logger.info(f"Completed: {description} in {duration:.2f} seconds")
@@ -94,9 +100,9 @@ def main():
 
         if success:
             successful_steps += 1
-            print(f"✅ {step['description']} - COMPLETED")
+            print(f"[OK] {step['description']} - COMPLETED")
         else:
-            print(f"❌ {step['description']} - FAILED")
+            print(f"[FAIL] {step['description']} - FAILED")
 
     # Run basic tests
     print(f"\n[{total_steps+1}/{total_steps+1}] Running basic tests")
@@ -106,9 +112,9 @@ def main():
 
     if test_success:
         successful_steps += 1
-        print("✅ Basic tests - COMPLETED")
+        print("[OK] Basic tests - COMPLETED")
     else:
-        print("❌ Basic tests - FAILED")
+        print("[FAIL] Basic tests - FAILED")
 
     # Final summary
     print("\n" + "="*80)
@@ -119,14 +125,17 @@ def main():
     print(f"Failed: {(total_steps + 1) - successful_steps}")
 
     if successful_steps == total_steps + 1:
-        print("\n🎉 ALL STEPS COMPLETED SUCCESSFULLY!")
+        print("\n*** ALL STEPS COMPLETED SUCCESSFULLY! ***")
         print("\nYou can now:")
         print("1. Start the API: python api/main.py")
         print("2. Access docs: http://localhost:8000/docs")
         print("3. Make predictions: http://localhost:8000/predict")
 
         # Optionally start the API
-        start_api = input("\nStart the API now? (y/n): ").lower().strip()
+        try:
+            start_api = input("\nStart the API now? (y/n): ").lower().strip()
+        except EOFError:
+            start_api = 'n'
         if start_api == 'y':
             print("\nStarting API server...")
             print("Access the API at: http://localhost:8000")
@@ -139,7 +148,7 @@ def main():
                 print("\nAPI server stopped.")
 
     else:
-        print("\n⚠️ SOME STEPS FAILED!")
+        print("\n[WARNING] SOME STEPS FAILED!")
         print("Please check the logs for details and resolve any issues.")
         logger.error(f"Pipeline completed with {(total_steps + 1) - successful_steps} failures")
 

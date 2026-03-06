@@ -10,11 +10,20 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
 try:
-    import openai
+    from openai import OpenAI
     OPENAI_AVAILABLE = True
 except ImportError:
     OPENAI_AVAILABLE = False
-    openai = None
+    OpenAI = None
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
+
+import requests
 
 from config.settings import settings
 from config.logging_config import get_logger
@@ -24,50 +33,116 @@ logger = get_logger(__name__)
 
 
 class LLMExplanationGenerator:
-    """Generates patient-friendly explanations using LLM."""
+    """Generates patient-friendly explanations using LLM.
+
+    Supports multiple providers via LLM_PROVIDER setting:
+      - ollama  : local Gemma2 (no API key required)
+      - gemini  : Google Gemini API (requires GEMINI_API_KEY)
+      - openai  : OpenAI API (requires OPENAI_API_KEY)
+    """
 
     def __init__(self, api_key: Optional[str] = None):
-        if not OPENAI_AVAILABLE:
-            logger.warning("OpenAI not available. LLM features will be limited.")
-            self.client = None
-            return
+        self.provider = settings.LLM_PROVIDER.lower()
+        self.client = None
 
-        # Initialize OpenAI client
+        if self.provider == "ollama":
+            self._init_ollama()
+        elif self.provider == "gemini":
+            self._init_gemini(api_key)
+        elif self.provider == "openai":
+            self._init_openai(api_key)
+        else:
+            logger.warning(f"Unknown LLM_PROVIDER '{self.provider}'. Using fallback.")
+
+    def _init_ollama(self):
+        """Initialize Ollama local provider."""
+        try:
+            resp = requests.get(f"{settings.OLLAMA_BASE_URL}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                self.client = "ollama"
+                logger.info(f"Ollama client initialized (model: {settings.LLM_MODEL})")
+            else:
+                logger.warning("Ollama server not reachable. Using fallback.")
+        except Exception as e:
+            logger.warning(f"Ollama not available: {e}. Using fallback.")
+
+    def _init_gemini(self, api_key: Optional[str] = None):
+        """Initialize Google Gemini provider."""
+        if not GEMINI_AVAILABLE:
+            logger.warning("google-generativeai not installed. Run: pip install google-generativeai")
+            return
+        api_key = api_key or settings.GEMINI_API_KEY
+        if api_key:
+            genai.configure(api_key=api_key)
+            self.client = genai.GenerativeModel(settings.LLM_MODEL)
+            logger.info(f"Gemini client initialized (model: {settings.LLM_MODEL})")
+        else:
+            logger.warning("No GEMINI_API_KEY provided. Using fallback.")
+
+    def _init_openai(self, api_key: Optional[str] = None):
+        """Initialize OpenAI provider."""
+        if not OPENAI_AVAILABLE:
+            logger.warning("openai package not installed. Using fallback.")
+            return
         api_key = api_key or settings.OPENAI_API_KEY
         if api_key:
-            openai.api_key = api_key
-            self.client = openai
-            logger.info("OpenAI client initialized")
+            self.client = OpenAI(api_key=api_key)
+            logger.info(f"OpenAI client initialized (model: {settings.LLM_MODEL})")
         else:
-            logger.warning("No OpenAI API key provided. LLM features disabled.")
-            self.client = None
+            logger.warning("No OPENAI_API_KEY provided. Using fallback.")
 
     def _make_llm_request(self, prompt: str, max_tokens: int = None,
                          temperature: float = None) -> str:
-        """Make a request to the LLM."""
+        """Make a request to the configured LLM provider."""
 
         if not self.client:
             return self._generate_fallback_explanation(prompt)
 
+        max_tokens = max_tokens or settings.LLM_MAX_TOKENS
+        temperature = temperature or settings.LLM_TEMPERATURE
+
         try:
-            max_tokens = max_tokens or settings.LLM_MAX_TOKENS
-            temperature = temperature or settings.LLM_TEMPERATURE
-
-            response = self.client.ChatCompletion.create(
-                model=settings.LLM_MODEL,
-                messages=[
-                    {"role": "system", "content": self._get_system_prompt()},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=max_tokens,
-                temperature=temperature
-            )
-
-            return response.choices[0].message.content.strip()
-
+            if self.provider == "ollama":
+                return self._request_ollama(prompt, max_tokens, temperature)
+            elif self.provider == "gemini":
+                return self._request_gemini(prompt)
+            elif self.provider == "openai":
+                return self._request_openai(prompt, max_tokens, temperature)
         except Exception as e:
             logger.error(f"LLM request failed: {str(e)}")
-            return self._generate_fallback_explanation(prompt)
+
+        return self._generate_fallback_explanation(prompt)
+
+    def _request_ollama(self, prompt: str, max_tokens: int, temperature: float) -> str:
+        """Make request to local Ollama server."""
+        full_prompt = f"{self._get_system_prompt()}\n\n{prompt}"
+        response = requests.post(
+            f"{settings.OLLAMA_BASE_URL}/api/generate",
+            json={"model": settings.LLM_MODEL, "prompt": full_prompt, "stream": False,
+                  "options": {"temperature": temperature, "num_predict": max_tokens}},
+            timeout=120
+        )
+        response.raise_for_status()
+        return response.json()["response"].strip()
+
+    def _request_gemini(self, prompt: str) -> str:
+        """Make request to Google Gemini API."""
+        full_prompt = f"{self._get_system_prompt()}\n\n{prompt}"
+        response = self.client.generate_content(full_prompt)
+        return response.text.strip()
+
+    def _request_openai(self, prompt: str, max_tokens: int, temperature: float) -> str:
+        """Make request to OpenAI API."""
+        response = self.client.chat.completions.create(
+            model=settings.LLM_MODEL,
+            messages=[
+                {"role": "system", "content": self._get_system_prompt()},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+        return response.choices[0].message.content.strip()
 
     def _get_system_prompt(self) -> str:
         """Get the system prompt for the LLM."""
@@ -294,6 +369,31 @@ Format as a simple list of questions.
 
         return base_questions
 
+    def _generate_disclaimer(self, risk_probability: float,
+                             risk_factors: List[Dict[str, Any]]) -> str:
+        """Generate a personalised, context-aware medical disclaimer using the LLM."""
+
+        risk_level = self._determine_risk_level(risk_probability)
+        top_factors = ', '.join([f.get('feature', '') for f in risk_factors[:3] if f.get('feature')])
+
+        prompt = f"""
+Write a brief, personalised medical disclaimer (2-3 sentences) for a patient who just received
+a {risk_level} cardiovascular risk assessment ({risk_probability*100:.0f}% risk probability).
+Their top contributing factors are: {top_factors}.
+
+The disclaimer should:
+- Acknowledge their specific risk level and top factors
+- Clarify this is a predictive tool, not a clinical diagnosis
+- Encourage them to consult a qualified cardiologist or GP
+- Be empathetic and reassuring, not alarming
+
+Write only the disclaimer text, no headings or labels.
+"""
+        try:
+            return self._make_llm_request(prompt, max_tokens=150)
+        except Exception:
+            return settings.MEDICAL_DISCLAIMER
+
     def generate_comprehensive_explanation(self, prediction_result: Dict[str, Any],
                                          shap_explanation: Dict[str, Any],
                                          patient_context: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -316,6 +416,9 @@ Format as a simple list of questions.
             risk_probability, risk_factors, patient_context
         )
 
+        # Generate personalised disclaimer via LLM
+        disclaimer = self._generate_disclaimer(risk_probability, risk_factors)
+
         # Compile comprehensive explanation
         comprehensive_explanation = {
             'risk_explanation': risk_explanation,
@@ -323,7 +426,7 @@ Format as a simple list of questions.
             'doctor_consultation_questions': doctor_questions,
             'generated_timestamp': datetime.now().isoformat(),
             'risk_level': self._determine_risk_level(risk_probability),
-            'medical_disclaimer': settings.MEDICAL_DISCLAIMER
+            'medical_disclaimer': disclaimer
         }
 
         return comprehensive_explanation

@@ -183,7 +183,7 @@ class TestUtilities:
         from utils.helpers import format_probability
 
         assert format_probability(0.25) == "25.0%"
-        assert format_probability(0.333, 2) == "33.33%"
+        assert format_probability(0.333, 2) == "33.30%"
 
 
 class TestAPIModels:

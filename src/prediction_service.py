@@ -6,7 +6,7 @@ Coordinates data processing, ML prediction, explainability, and LLM explanations
 import os
 import uuid
 import numpy as np
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple, Optional, List
 from datetime import datetime
 import json
 

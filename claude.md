@@ -437,3 +437,135 @@ Development:
 ---
 
 **Note**: This specification serves as the single source of truth for the project. All implementation decisions must align with this document. Any major architectural changes require explicit approval and document updates.
+
+---
+
+## ✅ Current Progress (as of 2026-03-05)
+
+### Completed
+- [x] Full project structure initialized
+- [x] UCI Heart Disease dataset downloaded (`data/raw/`)
+- [x] Data cleaning, feature engineering (17 features), train/val/test split
+- [x] XGBoost model trained — **Validation ROC-AUC: 0.9561, Test ROC-AUC: 0.8706**
+- [x] SHAP explainability working — plots saved in `logs/explainability_plots/`
+- [x] LLM layer implemented with **multi-provider support**:
+  - `ollama` (Gemma2 local, no API key) — currently active
+  - `gemini` (production, add `GEMINI_API_KEY` when ready)
+  - `openai` (fallback, key stored but quota exhausted)
+- [x] FastAPI server with `/predict`, `/health`, `/model/info` endpoints
+- [x] Prediction pipeline end-to-end working (`success: true`)
+- [x] Personalised LLM disclaimer generated per prediction
+- [x] 13/13 basic tests passing
+- [x] Full pipeline script (`scripts/run_full_pipeline.py`) runs 8/8 steps
+
+### Known Working State
+- **LLM Provider**: `ollama` with `gemma2:latest` (9.2B, Q4_0)
+- **Best Model**: XGBoost saved at `data/models/best_model.pkl`
+- **Processed data**: `data/processed/train.csv`, `val.csv`, `test.csv`
+- **Transformers**: `data/processed/transformers/` (scaler, label encoders, imputers)
+
+### Key Bugs Fixed
+- `ModuleNotFoundError: config` — fixed via `PYTHONPATH=.`
+- `UnicodeEncodeError` on Windows — replaced emoji with ASCII in pipeline script
+- `IndexError` in SHAP/evaluation — feature names mismatch (13 vs 17 features) fixed
+- `NameError: List` in prediction_service — missing typing import fixed
+- `y contains previously unseen labels` — LabelEncoder handles unseen values gracefully
+- `age_group missing at fit time` — `pd.cut` categorical dtype converted to string before encoding
+- OpenAI v0.x API → v1.x migration (`ChatCompletion.create` → `chat.completions.create`)
+- `LLM_MODEL=gpt-4` → `gpt-4o` (gpt-4 not accessible on current plan)
+
+---
+
+## 🚀 How to Resume This Project
+
+### Step 1 — Start Ollama (must be running for Gemma2)
+Ollama runs as a background service. Check if it's running:
+```cmd
+curl http://localhost:11434/api/tags
+```
+If not running, start it:
+```cmd
+ollama serve
+```
+
+### Step 2 — Start the API server
+```cmd
+cd "C:\Users\Parth Chavan\heart-disease-risk-prediction"
+set PYTHONPATH=. && python api/main.py
+```
+
+### Step 3 — Test the API
+Open browser: `http://localhost:8000/docs`
+
+Use this sample request body for `POST /predict`:
+```json
+{
+  "patient_data": {
+    "age": 55,
+    "sex": 1,
+    "cp": 3,
+    "trestbps": 140,
+    "chol": 250,
+    "fbs": 0,
+    "restecg": 1,
+    "thalach": 150,
+    "exang": 1,
+    "oldpeak": 2.5,
+    "slope": 1,
+    "ca": 1,
+    "thal": 2
+  },
+  "options": {
+    "include_explanation": true,
+    "include_llm_explanation": true
+  }
+}
+```
+Note: Response takes 30-60 seconds (Gemma2 running locally).
+
+### Re-run Full Pipeline (if needed)
+```cmd
+cd "C:\Users\Parth Chavan\heart-disease-risk-prediction"
+set PYTHONPATH=. && python scripts/run_full_pipeline.py
+```
+
+---
+
+## 📋 Next Steps (Remaining Work)
+
+### Priority 1 — Fix & Verify
+- [ ] **End-to-end API test**: Confirm full JSON response with `success: true`, SHAP values, and Gemma-generated explanation via Swagger UI
+- [ ] **Waterfall plot fix**: `Could not create waterfall plot: Explainer and SHAP values required` — minor issue in `explainability.py`
+
+### Priority 2 — Production Switch (when ready)
+- [ ] **Switch LLM to Gemini**: Get free API key from https://aistudio.google.com → update `.env`:
+  ```
+  LLM_PROVIDER=gemini
+  LLM_MODEL=gemini-1.5-pro
+  GEMINI_API_KEY=your-key-here
+  ```
+  Then run: `pip install google-generativeai`
+- [ ] **Install `google-generativeai`**: `pip install google-generativeai`
+
+### Priority 3 — Testing
+- [ ] Run full test suite (not just basic tests):
+  ```cmd
+  set PYTHONPATH=. && python -m pytest tests/ -v
+  ```
+- [ ] Fix any failures in `test_api.py`, `test_model_training.py`, etc.
+
+### Priority 4 — UI / Frontend
+- [ ] Build a simple web frontend (HTML form) or Streamlit dashboard for non-technical users
+- [ ] Display risk gauge, SHAP bar chart, and LLM explanation in a readable format
+
+### Priority 5 — Production Hardening
+- [ ] Docker containerisation (`Dockerfile` + `docker-compose.yml`)
+- [ ] Add response caching to reduce Gemma2 latency
+- [ ] Rate limiting on API endpoints
+- [ ] Switch to async Ollama calls so API doesn't block during LLM generation
+- [ ] Add model retraining script trigger via API endpoint
+
+### Priority 6 — Deployment
+- [ ] Deploy to cloud (AWS/GCP/Azure)
+- [ ] Set up CI/CD pipeline
+- [ ] Add Prometheus + Grafana monitoring

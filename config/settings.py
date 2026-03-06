@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     UCI_HEART_DISEASE_URL: str = "https://archive.ics.uci.edu/ml/machine-learning-databases/heart-disease/processed.cleveland.data"
 
     # LLM settings
+    LLM_PROVIDER: str = "ollama"  # "ollama" | "gemini" | "openai"
     OPENAI_API_KEY: Optional[str] = None
-    LLM_MODEL: str = "gpt-4"
+    GEMINI_API_KEY: Optional[str] = None
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    LLM_MODEL: str = "gemma2"
     LLM_MAX_TOKENS: int = 500
     LLM_TEMPERATURE: float = 0.3
 
