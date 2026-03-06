@@ -227,7 +227,7 @@ class ModelInfoResponse(BaseModel):
 class BatchPredictionRequest(BaseModel):
     """Batch prediction request model."""
 
-    patients: List[PatientDataRequest] = Field(..., description="List of patient data")
+    patients: List[PatientDataRequest] = Field(..., min_length=1, description="List of patient data")
     options: Optional[PredictionOptions] = PredictionOptions()
 
     class Config:

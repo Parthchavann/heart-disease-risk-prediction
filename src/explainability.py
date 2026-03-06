@@ -75,7 +75,8 @@ class ModelExplainer:
         # Calculate expected value
         if hasattr(self.explainer, 'expected_value'):
             if isinstance(self.explainer.expected_value, (list, np.ndarray)):
-                self.expected_value = self.explainer.expected_value[1]  # For binary classification
+                ev = self.explainer.expected_value
+                self.expected_value = ev[1] if len(ev) > 1 else ev[0]  # For binary classification
             else:
                 self.expected_value = self.explainer.expected_value
         else:
@@ -228,13 +229,18 @@ class ModelExplainer:
                       model_name: str = "Model") -> str:
         """Create SHAP waterfall plot for a single prediction."""
 
-        if self.explainer is None or self.shap_values is None:
-            raise ValueError("Explainer and SHAP values required")
+        if self.explainer is None:
+            raise ValueError("Explainer not initialized. Call initialize_explainer first.")
 
         plt.figure(figsize=(10, 8))
 
-        # Create waterfall plot
-        shap_values_for_plot = self.shap_values[sample_index]
+        # Use shap_values from explanation dict if available, else fall back to self.shap_values
+        if 'shap_values' in explanation:
+            shap_values_for_plot = np.array(explanation['shap_values'])
+        elif self.shap_values is not None:
+            shap_values_for_plot = self.shap_values[sample_index]
+        else:
+            raise ValueError("No SHAP values available. Pass explanation with 'shap_values' key.")
         expected_value = self.expected_value
 
         # Manual waterfall plot since shap.waterfall_plot might not be available in all versions
@@ -419,6 +425,7 @@ def main():
 
         # Initialize explainer
         explainer = ModelExplainer()
+        explainer.feature_names = [c for c in test_df.columns if c != 'target']
         explainer.initialize_explainer(model, X_test[:100])  # Use subset as background
 
         # Generate explanations for a few samples
