@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info
+.eggs
+dist
+build
+.pytest_cache
+.mypy_cache
+
+# Environment
+.env
+.env.*
+!.env.example
+venv/
+.venv/
+env/
+
+# Logs (runtime)
+logs/
+catboost_info/
+
+# Notebooks
+notebooks/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db

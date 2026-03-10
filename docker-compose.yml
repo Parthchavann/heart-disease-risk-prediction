@@ -3,28 +3,43 @@ version: "3.9"
 services:
   api:
     build: .
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    command: ./startup.sh
     ports:
       - "8000:8000"
-    volumes:
-      - .:/app
     env_file:
       - .env
     environment:
       - PYTHONPATH=/app
+      - API_PORT=8000
+    volumes:
+      - model_data:/app/data
+      - logs:/app/logs
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
 
   streamlit:
     build: .
     command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
     ports:
       - "8501:8501"
-    volumes:
-      - .:/app
     env_file:
       - .env
     environment:
       - PYTHONPATH=/app
+      - API_URL=http://api:8000
+    volumes:
+      - model_data:/app/data
+      - logs:/app/logs
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  model_data:
+  logs:

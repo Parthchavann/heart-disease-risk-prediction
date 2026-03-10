@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: heart-disease-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    startCommand: ./startup.sh
+    healthCheckPath: /health
+    envVars:
+      - key: LLM_PROVIDER
+        value: gemini
+      - key: LLM_MODEL
+        value: gemini-1.5-flash
+      - key: GEMINI_API_KEY
+        sync: false   # set manually in Render dashboard
+      - key: DEBUG
+        value: "false"
+      - key: LOG_LEVEL
+        value: INFO
+    disk:
+      name: model-data
+      mountPath: /app/data
+      sizeGB: 1
