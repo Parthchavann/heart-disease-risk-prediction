@@ -547,46 +547,38 @@ the pipeline re-splits data, which makes any previously saved model misaligned.
 
 ## 📋 Remaining Work (do in this order)
 
-### STEP 1 — Verify tests still pass after model_training.py cleanup
+### ~~STEP 1~~ DONE — Tests passing (46/46)
+### ~~STEP 2~~ DONE — optimal_threshold None bug fixed
+### ~~STEP 3~~ DONE — LLM switched to Gemini 1.5 Flash
+### ~~STEP 4~~ DONE — Async LLM calls via asyncio.to_thread()
+### ~~STEP 5~~ DONE — Response caching (1-hour TTL cache)
+### ~~STEP 6~~ DONE — Cloud deployment setup
+
+Deployment files added:
+- `startup.sh`: auto-trains model if missing, then starts API
+- `Dockerfile`: multi-stage build (builder + slim runtime)
+- `.dockerignore`: excludes dev artifacts
+- `docker-compose.yml`: named volumes, healthcheck, service dependency
+- `railway.toml`: Railway.app deployment config
+- `render.yaml`: Render.com deployment config
+
+**To deploy on Railway:**
+1. Push repo to GitHub
+2. Go to railway.app → New Project → Deploy from GitHub
+3. Set env vars in Railway dashboard: `GEMINI_API_KEY`, `LLM_PROVIDER=gemini`, `LLM_MODEL=gemini-1.5-flash`
+4. Railway auto-detects `railway.toml` and deploys
+
+**To deploy on Render:**
+1. Push repo to GitHub
+2. Go to render.com → New → Web Service → connect GitHub repo
+3. Render auto-detects `render.yaml`
+4. Set `GEMINI_API_KEY` in Render dashboard (marked `sync: false`)
+
+**To deploy with Docker locally or on VPS:**
 ```cmd
-set PYTHONPATH=. && python -m pytest tests/ -v
+docker-compose up --build
 ```
-Expected: 46/46 pass. Fix any failures before proceeding.
-
-### STEP 2 — Fix optimal_threshold None bug in prediction_service.py
-The `optimal_threshold` stored in `best_model_metadata.json` can be `None`
-(if `optimize_threshold` returns None). `prediction_service.py` line ~148 does:
-```python
-threshold = self.model_metadata.get('optimal_threshold', 0.5)
-```
-`dict.get()` returns `None` (not 0.5) when the key exists with value `None`.
-Fix: `threshold = self.model_metadata.get('optimal_threshold') or 0.5`
-
-### STEP 3 — Switch LLM to Gemini (production, faster than Gemma2)
-1. Get free API key: https://aistudio.google.com
-2. Update `.env`:
-   ```
-   LLM_PROVIDER=gemini
-   LLM_MODEL=gemini-1.5-pro
-   GEMINI_API_KEY=your-key-here
-   ```
-3. Install: `pip install google-generativeai`
-4. Test: restart API and call `/predict` — response should be <5 s instead of 30-60 s
-
-### STEP 4 — Async Ollama calls (remove API blocking)
-Currently `prediction_service.py` calls the LLM synchronously, blocking FastAPI for 30-60 s.
-Fix: make `generate_llm_explanation` async and use `httpx.AsyncClient` for Ollama calls.
-This lets the API serve other requests while Gemma2 generates.
-
-### STEP 5 — Response caching (reduce repeated LLM calls)
-Add an in-memory cache (e.g. `functools.lru_cache` or `cachetools.TTLCache`) keyed on
-a hash of (risk_level, top-3 risk factors). Identical risk profiles reuse cached LLM output.
-
-### STEP 6 — Cloud deployment
-Use existing `Dockerfile` + `docker-compose.yml`.
-Recommended path: push image to Docker Hub → deploy on Railway / Render (free tier) or AWS ECS.
-Set env vars (`GEMINI_API_KEY`, `LLM_PROVIDER=gemini`) in the cloud dashboard.
-No code changes needed — Docker setup is production-ready.
+API: http://localhost:8000/docs | Streamlit: http://localhost:8501
 
 ### STEP 7 (optional) — Monitoring
 Add Prometheus metrics endpoint + Grafana dashboard for:
