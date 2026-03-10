@@ -145,7 +145,8 @@ class HeartDiseasePredictionService:
         risk_probability = float(prediction_proba[1])
 
         # Use Youden-optimal threshold if stored in metadata
-        threshold = self.model_metadata.get('optimal_threshold', 0.5)
+        # Use `or 0.5` instead of .get(..., 0.5) so that a stored None also falls back
+        threshold = self.model_metadata.get('optimal_threshold') or 0.5
         prediction = int(risk_probability >= threshold)
 
         logger.info(f"Prediction made: {prediction} (threshold={threshold:.3f}), "
@@ -273,21 +274,24 @@ class HeartDiseasePredictionService:
             if include_explanation:
                 try:
                     shap_explanation = self.generate_explanation(X, risk_probability, patient_data)
-                    result['explanation'] = shap_explanation
+                    # Store full report for LLM use; expose only DetailedExplanation-compatible dict to API
+                    result['_full_shap_report'] = shap_explanation
+                    result['explanation'] = shap_explanation.get('detailed_explanation', shap_explanation)
                 except Exception as e:
                     logger.error(f"SHAP explanation failed: {str(e)}")
                     result['explanation_error'] = str(e)
 
-            if include_llm_explanation and include_explanation and 'explanation' in result:
+            if include_llm_explanation and include_explanation and '_full_shap_report' in result:
                 try:
                     llm_explanation = self.generate_llm_explanation(
-                        result, result['explanation'], patient_data
+                        result, result['_full_shap_report'], patient_data
                     )
                     result['llm_explanation'] = llm_explanation
                 except Exception as e:
                     logger.error(f"LLM explanation failed: {str(e)}")
                     result['llm_explanation_error'] = str(e)
 
+            result.pop('_full_shap_report', None)
             logger.info(f"Prediction {prediction_id} completed successfully")
             return result
 

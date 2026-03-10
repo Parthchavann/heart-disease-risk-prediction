@@ -3,9 +3,11 @@ LLM integration layer for Heart Disease Risk Prediction.
 Converts technical ML outputs into patient-friendly explanations and recommendations.
 """
 
+import hashlib
 import os
 import json
 import logging
+import time
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
@@ -17,11 +19,18 @@ except ImportError:
     OpenAI = None
 
 try:
-    import google.generativeai as genai
+    from google import genai as google_genai
     GEMINI_AVAILABLE = True
+    GEMINI_LEGACY = False
 except ImportError:
-    GEMINI_AVAILABLE = False
-    genai = None
+    try:
+        import google.generativeai as google_genai  # type: ignore
+        GEMINI_AVAILABLE = True
+        GEMINI_LEGACY = True
+    except ImportError:
+        GEMINI_AVAILABLE = False
+        GEMINI_LEGACY = False
+        google_genai = None
 
 import requests
 
@@ -30,6 +39,33 @@ from config.logging_config import get_logger
 from utils.constants import RiskLevel, RISK_FACTOR_EXPLANATIONS
 
 logger = get_logger(__name__)
+
+# ---------------------------------------------------------------------------
+# Simple in-memory TTL cache for LLM responses.
+# Keyed on a hash of (risk_level, sorted top-3 feature names).
+# Identical risk profiles reuse cached output for LLM_CACHE_TTL_SECONDS.
+# ---------------------------------------------------------------------------
+_LLM_CACHE: Dict[str, Dict[str, Any]] = {}
+_LLM_CACHE_TTL_SECONDS: int = 3600  # 1 hour
+
+
+def _cache_key(risk_level: str, risk_factors: List[Dict[str, Any]]) -> str:
+    top3 = sorted(f.get('feature', '') for f in risk_factors[:3])
+    raw = f"{risk_level}|{'|'.join(top3)}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
+def _cache_get(key: str) -> Optional[Dict[str, Any]]:
+    entry = _LLM_CACHE.get(key)
+    if entry and (time.time() - entry['ts']) < _LLM_CACHE_TTL_SECONDS:
+        return entry['value']
+    if entry:
+        del _LLM_CACHE[key]
+    return None
+
+
+def _cache_set(key: str, value: Dict[str, Any]) -> None:
+    _LLM_CACHE[key] = {'value': value, 'ts': time.time()}
 
 
 class LLMExplanationGenerator:
@@ -67,17 +103,23 @@ class LLMExplanationGenerator:
             logger.warning(f"Ollama not available: {e}. Using fallback.")
 
     def _init_gemini(self, api_key: Optional[str] = None):
-        """Initialize Google Gemini provider."""
+        """Initialize Google Gemini provider (new google.genai SDK)."""
         if not GEMINI_AVAILABLE:
-            logger.warning("google-generativeai not installed. Run: pip install google-generativeai")
+            logger.warning("google-genai not installed. Run: pip install google-genai")
             return
         api_key = api_key or settings.GEMINI_API_KEY
-        if api_key:
-            genai.configure(api_key=api_key)
-            self.client = genai.GenerativeModel(settings.LLM_MODEL)
-            logger.info(f"Gemini client initialized (model: {settings.LLM_MODEL})")
-        else:
+        if not api_key:
             logger.warning("No GEMINI_API_KEY provided. Using fallback.")
+            return
+        if GEMINI_LEGACY:
+            # Old google.generativeai SDK (deprecated)
+            google_genai.configure(api_key=api_key)
+            self.client = google_genai.GenerativeModel(settings.LLM_MODEL)
+        else:
+            # New google.genai SDK
+            self.client = google_genai.Client(api_key=api_key)
+        logger.info(f"Gemini client initialized (model: {settings.LLM_MODEL}, "
+                    f"sdk={'legacy' if GEMINI_LEGACY else 'new'})")
 
     def _init_openai(self, api_key: Optional[str] = None):
         """Initialize OpenAI provider."""
@@ -128,7 +170,12 @@ class LLMExplanationGenerator:
     def _request_gemini(self, prompt: str) -> str:
         """Make request to Google Gemini API."""
         full_prompt = f"{self._get_system_prompt()}\n\n{prompt}"
-        response = self.client.generate_content(full_prompt)
+        if GEMINI_LEGACY:
+            response = self.client.generate_content(full_prompt)
+        else:
+            response = self.client.models.generate_content(
+                model=settings.LLM_MODEL, contents=full_prompt
+            )
         return response.text.strip()
 
     def _request_openai(self, prompt: str, max_tokens: int, temperature: float) -> str:
@@ -397,11 +444,23 @@ Write only the disclaimer text, no headings or labels.
     def generate_comprehensive_explanation(self, prediction_result: Dict[str, Any],
                                          shap_explanation: Dict[str, Any],
                                          patient_context: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Generate comprehensive patient-friendly explanation."""
+        """Generate comprehensive patient-friendly explanation.
+
+        Results are cached for _LLM_CACHE_TTL_SECONDS (1 h) by risk level +
+        top-3 risk factor names so identical profiles skip the LLM call.
+        """
 
         risk_probability = prediction_result.get('risk_probability', 0.0)
         risk_factors = shap_explanation.get('top_risk_factors', [])
         protective_factors = shap_explanation.get('top_protective_factors', [])
+
+        # Check cache
+        risk_level_key = self._determine_risk_level(risk_probability)
+        ck = _cache_key(risk_level_key, risk_factors)
+        cached = _cache_get(ck)
+        if cached:
+            logger.info("LLM explanation served from cache")
+            return cached
 
         # Generate all explanation components
         risk_explanation = self.generate_risk_explanation(
@@ -428,6 +487,9 @@ Write only the disclaimer text, no headings or labels.
             'risk_level': self._determine_risk_level(risk_probability),
             'medical_disclaimer': disclaimer
         }
+
+        # Store in cache for reuse
+        _cache_set(ck, comprehensive_explanation)
 
         return comprehensive_explanation
 

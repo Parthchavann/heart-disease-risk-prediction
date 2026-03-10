@@ -170,6 +170,32 @@ class DataProcessor:
             (df_engineered['trestbps'] > 140).astype(int)
         )
 
+        # --- Interaction features ---
+        # Age × cholesterol (older + higher chol = compounding risk)
+        df_engineered['age_chol'] = (
+            df_engineered['age'] * df_engineered['chol'] / 10000.0
+        )
+
+        # Blood-pressure-to-heart-rate ratio (haemodynamic stress proxy)
+        df_engineered['bp_hr_ratio'] = (
+            df_engineered['trestbps'] / (df_engineered['thalach'] + 1e-6)
+        )
+
+        # ST depression amplified by exercise-induced angina
+        df_engineered['oldpeak_exang'] = (
+            df_engineered['oldpeak'] * df_engineered['exang']
+        )
+
+        # Number of major vessels × thalassemia type (combined structural risk)
+        df_engineered['ca_thal_risk'] = (
+            df_engineered['ca'] * df_engineered['thal']
+        )
+
+        # Chest pain type × exercise angina (symptom severity combo)
+        df_engineered['cp_exang_combo'] = (
+            df_engineered['cp'] * (df_engineered['exang'] + 1)
+        )
+
         logger.info(f"Feature engineering completed. New shape: {df_engineered.shape}")
 
         return df_engineered

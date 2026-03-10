@@ -2,6 +2,7 @@
 Prediction endpoints for heart disease risk assessment.
 """
 
+import asyncio
 import time
 import uuid
 from typing import List
@@ -58,11 +59,13 @@ async def predict_heart_disease_risk(
         validate_patient_data_ranges(patient_data)
         patient_data = sanitize_input_data(patient_data)
 
-        # Make prediction with options
-        result = service.predict(
+        # Make prediction with options — run in thread so the LLM call (30-60 s for
+        # local Ollama/Gemma2) doesn't block the FastAPI event loop.
+        result = await asyncio.to_thread(
+            service.predict,
             patient_data,
-            include_explanation=request.options.include_explanation,
-            include_llm_explanation=request.options.include_llm_explanation
+            request.options.include_explanation,
+            request.options.include_llm_explanation,
         )
 
         logger.info(f"Prediction completed: {result['prediction_id']}")

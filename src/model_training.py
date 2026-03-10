@@ -12,8 +12,13 @@ import joblib
 from datetime import datetime
 
 # Sklearn imports
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import (
+    RandomForestClassifier, ExtraTreesClassifier,
+    GradientBoostingClassifier, HistGradientBoostingClassifier,
+    VotingClassifier
+)
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn.svm import SVC
 from sklearn.model_selection import GridSearchCV, cross_val_score, StratifiedKFold
@@ -37,6 +42,14 @@ try:
 except ImportError:
     LIGHTGBM_AVAILABLE = False
     lgb = None
+
+# CatBoost
+try:
+    from catboost import CatBoostClassifier
+    CATBOOST_AVAILABLE = True
+except ImportError:
+    CATBOOST_AVAILABLE = False
+    CatBoostClassifier = None
 
 from config.settings import settings
 from config.logging_config import get_logger
@@ -67,7 +80,10 @@ class ModelTrainer:
 
         configs = {
             'logistic_regression': {
-                'model': LogisticRegression(random_state=settings.RANDOM_STATE, max_iter=1000),
+                'model': LogisticRegression(
+                    random_state=settings.RANDOM_STATE, max_iter=1000,
+                    class_weight='balanced'
+                ),
                 'params': {
                     'C': [0.1, 1, 10, 100],
                     'penalty': ['l1', 'l2'],
@@ -75,7 +91,10 @@ class ModelTrainer:
                 }
             },
             'decision_tree': {
-                'model': DecisionTreeClassifier(random_state=settings.RANDOM_STATE),
+                'model': DecisionTreeClassifier(
+                    random_state=settings.RANDOM_STATE,
+                    class_weight='balanced'
+                ),
                 'params': {
                     'max_depth': [3, 5, 7, 10, None],
                     'min_samples_split': [2, 5, 10],
@@ -84,7 +103,10 @@ class ModelTrainer:
                 }
             },
             'random_forest': {
-                'model': RandomForestClassifier(random_state=settings.RANDOM_STATE),
+                'model': RandomForestClassifier(
+                    random_state=settings.RANDOM_STATE,
+                    class_weight='balanced'
+                ),
                 'params': {
                     'n_estimators': [50, 100, 200],
                     'max_depth': [3, 5, 7, 10, None],
@@ -94,7 +116,10 @@ class ModelTrainer:
                 }
             },
             'svm': {
-                'model': SVC(random_state=settings.RANDOM_STATE, probability=True),
+                'model': SVC(
+                    random_state=settings.RANDOM_STATE, probability=True,
+                    class_weight='balanced'
+                ),
                 'params': {
                     'C': [0.1, 1, 10, 100],
                     'kernel': ['linear', 'rbf', 'poly'],
@@ -103,28 +128,75 @@ class ModelTrainer:
             }
         }
 
-        # Add XGBoost if available
-        if XGBOOST_AVAILABLE:
-            configs['xgboost'] = {
-                'model': xgb.XGBClassifier(
-                    random_state=settings.RANDOM_STATE,
-                    eval_metric='logloss'
-                ),
-                'params': {
-                    'n_estimators': [50, 100, 200],
-                    'max_depth': [3, 4, 5, 6],
-                    'learning_rate': [0.01, 0.1, 0.2],
-                    'subsample': [0.8, 0.9, 1.0],
-                    'colsample_bytree': [0.8, 0.9, 1.0]
-                }
+        # Extra Trees — high-variance complement to Random Forest
+        configs['extra_trees'] = {
+            'model': ExtraTreesClassifier(
+                random_state=settings.RANDOM_STATE,
+                class_weight='balanced'
+            ),
+            'params': {
+                'n_estimators': [100, 200, 300],
+                'max_depth': [5, 10, None],
+                'min_samples_split': [2, 5],
+                'min_samples_leaf': [1, 2],
+                'max_features': ['sqrt', 'log2']
             }
+        }
+
+        # Histogram Gradient Boosting — fast, supports missing values natively
+        configs['hist_gradient_boosting'] = {
+            'model': HistGradientBoostingClassifier(
+                random_state=settings.RANDOM_STATE,
+                class_weight='balanced'
+            ),
+            'params': {
+                'max_iter': [100, 200, 300],
+                'max_depth': [3, 5, 7, None],
+                'learning_rate': [0.01, 0.05, 0.1],
+                'min_samples_leaf': [10, 20, 30],
+                'l2_regularization': [0.0, 0.1, 1.0]
+            }
+        }
+
+        # Gradient Boosting — sequential boosting with small grids for speed
+        configs['gradient_boosting'] = {
+            'model': GradientBoostingClassifier(
+                random_state=settings.RANDOM_STATE
+            ),
+            'params': {
+                'n_estimators': [100, 200],
+                'max_depth': [3, 5],
+                'learning_rate': [0.05, 0.1],
+                'subsample': [0.8, 1.0],
+                'min_samples_leaf': [1, 5]
+            }
+        }
+
+        # MLP Neural Network — non-linear patterns from a different paradigm
+        configs['mlp'] = {
+            'model': MLPClassifier(
+                random_state=settings.RANDOM_STATE,
+                max_iter=1000,
+                early_stopping=True
+            ),
+            'params': {
+                'hidden_layer_sizes': [(64, 32), (128, 64), (64, 64, 32)],
+                'activation': ['relu', 'tanh'],
+                'alpha': [0.0001, 0.001, 0.01],
+                'learning_rate': ['adaptive']
+            }
+        }
+
+        # XGBoost is tuned via Optuna (optuna_tune_xgboost), not GridSearchCV,
+        # because XGBoost multiprocessing crashes on Windows with n_jobs=-1.
 
         # Add LightGBM if available
         if LIGHTGBM_AVAILABLE:
             configs['lightgbm'] = {
                 'model': lgb.LGBMClassifier(
                     random_state=settings.RANDOM_STATE,
-                    verbose=-1
+                    verbose=-1,
+                    class_weight='balanced'
                 ),
                 'params': {
                     'n_estimators': [50, 100, 200],
@@ -133,6 +205,22 @@ class ModelTrainer:
                     'num_leaves': [15, 31, 63],
                     'subsample': [0.8, 0.9, 1.0],
                     'colsample_bytree': [0.8, 0.9, 1.0]
+                }
+            }
+
+        # Add CatBoost if available (handles class imbalance natively)
+        if CATBOOST_AVAILABLE:
+            configs['catboost'] = {
+                'model': CatBoostClassifier(
+                    random_state=settings.RANDOM_STATE,
+                    verbose=0,
+                    auto_class_weights='Balanced'
+                ),
+                'params': {
+                    'iterations': [100, 200, 300],
+                    'depth': [4, 6, 8],
+                    'learning_rate': [0.01, 0.05, 0.1],
+                    'l2_leaf_reg': [1, 3, 5]
                 }
             }
 
@@ -226,13 +314,13 @@ class ModelTrainer:
             param_grid = config['params']
             base_model = config['model']
 
-            # Perform grid search
+            # Perform grid search — n_jobs=1 to avoid Windows resource exhaustion
             grid_search = GridSearchCV(
                 estimator=base_model,
                 param_grid=param_grid,
                 cv=cv,
                 scoring='roc_auc',
-                n_jobs=-1,
+                n_jobs=1,
                 verbose=0
             )
 
@@ -381,6 +469,62 @@ class ModelTrainer:
 
         return model_path
 
+    def optuna_tune_lightgbm(self, X: np.ndarray, y: np.ndarray,
+                              X_val: np.ndarray, y_val: np.ndarray,
+                              n_trials: int = 150) -> Dict[str, Any]:
+        """Tune LightGBM using Optuna Bayesian optimisation."""
+
+        if not OPTUNA_AVAILABLE or not LIGHTGBM_AVAILABLE:
+            logger.warning("Optuna or LightGBM not available — skipping.")
+            return {}
+
+        logger.info(f"Starting Optuna tuning for LightGBM ({n_trials} trials)...")
+
+        cv = StratifiedKFold(n_splits=settings.CV_FOLDS, shuffle=True,
+                             random_state=settings.RANDOM_STATE)
+
+        def objective(trial):
+            params = {
+                'n_estimators':     trial.suggest_int('n_estimators', 50, 500),
+                'max_depth':        trial.suggest_int('max_depth', 3, 10),
+                'learning_rate':    trial.suggest_float('learning_rate', 0.005, 0.3, log=True),
+                'num_leaves':       trial.suggest_int('num_leaves', 15, 127),
+                'subsample':        trial.suggest_float('subsample', 0.5, 1.0),
+                'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
+                'reg_alpha':        trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
+                'reg_lambda':       trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
+                'min_child_samples':trial.suggest_int('min_child_samples', 5, 50),
+                'class_weight':     'balanced',
+                'random_state':     settings.RANDOM_STATE,
+                'verbose':          -1,
+            }
+            model = lgb.LGBMClassifier(**params)
+            scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc', n_jobs=1)
+            return scores.mean()
+
+        study = optuna.create_study(direction='maximize',
+                                    sampler=optuna.samplers.TPESampler(seed=settings.RANDOM_STATE))
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+        best_params = study.best_params
+        best_params.update({'random_state': settings.RANDOM_STATE, 'verbose': -1,
+                            'class_weight': 'balanced'})
+
+        logger.info(f"Optuna LightGBM best CV ROC-AUC: {study.best_value:.4f}")
+
+        best_model = lgb.LGBMClassifier(**best_params)
+        best_model.fit(X, y)
+
+        val_metrics = self.evaluate_model(best_model, X_val, y_val)
+        logger.info(f"Optuna LightGBM validation metrics: {val_metrics}")
+
+        return {
+            'best_estimator': best_model,
+            'best_params': best_params,
+            'best_score': study.best_value,
+            'val_metrics': val_metrics,
+        }
+
     def build_stacking_ensemble(self, tuned_results: Dict[str, Any],
                                 X: np.ndarray, y: np.ndarray,
                                 X_val: np.ndarray, y_val: np.ndarray) -> Dict[str, Any]:
@@ -388,12 +532,13 @@ class ModelTrainer:
 
         from sklearn.ensemble import StackingClassifier
 
-        # Pick the top-3 base estimators by CV score
+        # Pick the top-5 base estimators by val AUC for maximum diversity
         sorted_models = sorted(
-            tuned_results.items(),
-            key=lambda kv: kv[1]['best_score'],
+            [(name, res) for name, res in tuned_results.items()
+             if 'best_estimator' in res],
+            key=lambda kv: self.evaluate_model(kv[1]['best_estimator'], X_val, y_val)['roc_auc'],
             reverse=True
-        )[:3]
+        )[:5]
 
         estimators = [(name, res['best_estimator']) for name, res in sorted_models]
         logger.info(f"Stacking base learners: {[n for n, _ in estimators]}")
@@ -427,6 +572,41 @@ class ModelTrainer:
             'val_metrics': val_metrics
         }
 
+    def build_soft_voting_ensemble(self, tuned_results: Dict[str, Any],
+                                   X: np.ndarray, y: np.ndarray,
+                                   X_val: np.ndarray, y_val: np.ndarray) -> Dict[str, Any]:
+        """Build a soft voting ensemble from all tuned models."""
+
+        # Use all models that support predict_proba
+        estimators = [
+            (name, res['best_estimator'])
+            for name, res in tuned_results.items()
+            if 'best_estimator' in res and hasattr(res['best_estimator'], 'predict_proba')
+        ]
+
+        logger.info(f"Soft voting ensemble with: {[n for n, _ in estimators]}")
+
+        voting = VotingClassifier(estimators=estimators, voting='soft', n_jobs=1)
+        voting.fit(X, y)
+
+        val_metrics = self.evaluate_model(voting, X_val, y_val)
+        cv_score = cross_val_score(
+            voting, X, y,
+            cv=StratifiedKFold(n_splits=settings.CV_FOLDS, shuffle=True,
+                               random_state=settings.RANDOM_STATE),
+            scoring='roc_auc', n_jobs=1
+        ).mean()
+
+        logger.info(f"Soft voting — val ROC-AUC: {val_metrics['roc_auc']:.4f}, "
+                    f"CV ROC-AUC: {cv_score:.4f}")
+
+        return {
+            'best_estimator': voting,
+            'best_params': {'members': [n for n, _ in estimators]},
+            'best_score': cv_score,
+            'val_metrics': val_metrics
+        }
+
     def optimize_threshold(self, model: Any, X_val: np.ndarray, y_val: np.ndarray) -> float:
         """Find the decision threshold that maximises Youden's J (sensitivity + specificity - 1)."""
 
@@ -444,7 +624,7 @@ class ModelTrainer:
 
     def optuna_tune_xgboost(self, X: np.ndarray, y: np.ndarray,
                             X_val: np.ndarray, y_val: np.ndarray,
-                            n_trials: int = 100) -> Dict[str, Any]:
+                            n_trials: int = 250) -> Dict[str, Any]:
         """Tune XGBoost using Optuna Bayesian optimisation."""
 
         if not OPTUNA_AVAILABLE or not XGBOOST_AVAILABLE:
@@ -456,22 +636,29 @@ class ModelTrainer:
         cv = StratifiedKFold(n_splits=settings.CV_FOLDS, shuffle=True,
                              random_state=settings.RANDOM_STATE)
 
+        # Class imbalance ratio for scale_pos_weight
+        neg = int((y == 0).sum())
+        pos = int((y == 1).sum())
+        spw = neg / pos if pos > 0 else 1.0
+        logger.info(f"XGBoost scale_pos_weight = {spw:.2f} (neg={neg}, pos={pos})")
+
         def objective(trial):
             params = {
-                'n_estimators':      trial.suggest_int('n_estimators', 50, 500),
-                'max_depth':         trial.suggest_int('max_depth', 2, 8),
+                'n_estimators':      trial.suggest_int('n_estimators', 50, 600),
+                'max_depth':         trial.suggest_int('max_depth', 2, 10),
                 'learning_rate':     trial.suggest_float('learning_rate', 0.005, 0.3, log=True),
-                'subsample':         trial.suggest_float('subsample', 0.6, 1.0),
-                'colsample_bytree':  trial.suggest_float('colsample_bytree', 0.6, 1.0),
+                'subsample':         trial.suggest_float('subsample', 0.5, 1.0),
+                'colsample_bytree':  trial.suggest_float('colsample_bytree', 0.5, 1.0),
                 'reg_alpha':         trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
                 'reg_lambda':        trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
                 'min_child_weight':  trial.suggest_int('min_child_weight', 1, 10),
                 'gamma':             trial.suggest_float('gamma', 0, 5),
+                'scale_pos_weight':  spw,
                 'random_state':      settings.RANDOM_STATE,
                 'eval_metric':       'logloss',
             }
             model = xgb.XGBClassifier(**params)
-            scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc', n_jobs=-1)
+            scores = cross_val_score(model, X, y, cv=cv, scoring='roc_auc', n_jobs=1)
             return scores.mean()
 
         study = optuna.create_study(direction='maximize',
@@ -517,42 +704,66 @@ class ModelTrainer:
         # Select best model from GridSearchCV results
         best_model, best_model_name = self.select_best_model(tuned_results, X_val, y_val)
 
-        # Optuna tuning for XGBoost (Bayesian search — finds better params)
-        optuna_result = self.optuna_tune_xgboost(X, y, X_val, y_val, n_trials=100)
-        if optuna_result:
-            optuna_val_auc = optuna_result['val_metrics']['roc_auc']
+        # Optuna tuning for XGBoost
+        optuna_xgb = self.optuna_tune_xgboost(X, y, X_val, y_val)
+        if optuna_xgb:
             grid_val_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
-            if optuna_val_auc > grid_val_auc:
-                logger.info(f"Optuna XGBoost ({optuna_val_auc:.4f}) beats GridSearch best "
-                            f"({grid_val_auc:.4f}) — using Optuna model.")
-                best_model = optuna_result['best_estimator']
+            if optuna_xgb['val_metrics']['roc_auc'] > grid_val_auc:
+                logger.info(f"Optuna XGBoost ({optuna_xgb['val_metrics']['roc_auc']:.4f}) "
+                            f"beats GridSearch best ({grid_val_auc:.4f}).")
+                best_model = optuna_xgb['best_estimator']
                 best_model_name = 'xgboost_optuna'
-                tuned_results['xgboost_optuna'] = optuna_result
-            else:
-                logger.info(f"GridSearch best ({grid_val_auc:.4f}) >= Optuna "
-                            f"({optuna_val_auc:.4f}) — keeping GridSearch model.")
+            tuned_results['xgboost_optuna'] = optuna_xgb
 
-        # Stacking ensemble (Step 5)
+        # Optuna tuning for LightGBM
+        optuna_lgb = self.optuna_tune_lightgbm(X, y, X_val, y_val)
+        if optuna_lgb:
+            current_best_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
+            if optuna_lgb['val_metrics']['roc_auc'] > current_best_auc:
+                logger.info(f"Optuna LightGBM ({optuna_lgb['val_metrics']['roc_auc']:.4f}) "
+                            f"beats current best ({current_best_auc:.4f}).")
+                best_model = optuna_lgb['best_estimator']
+                best_model_name = 'lightgbm_optuna'
+            tuned_results['lightgbm_optuna'] = optuna_lgb
+
+        # Stacking ensemble — top-5 by val AUC
         try:
             stack_result = self.build_stacking_ensemble(tuned_results, X, y, X_val, y_val)
-            stack_val_auc = stack_result['val_metrics']['roc_auc']
-            current_val_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
-            if stack_val_auc > current_val_auc:
-                logger.info(f"Stacking ({stack_val_auc:.4f}) beats current best "
-                            f"({current_val_auc:.4f}) — using stacking ensemble.")
+            tuned_results['stacking_ensemble'] = stack_result
+            current_best_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
+            if stack_result['val_metrics']['roc_auc'] > current_best_auc:
+                logger.info(f"Stacking ({stack_result['val_metrics']['roc_auc']:.4f}) "
+                            f"beats current best ({current_best_auc:.4f}).")
                 best_model = stack_result['best_estimator']
                 best_model_name = 'stacking_ensemble'
-            else:
-                logger.info(f"Current best ({current_val_auc:.4f}) >= stacking "
-                            f"({stack_val_auc:.4f}) — keeping current model.")
         except Exception as e:
-            logger.warning(f"Stacking ensemble failed: {e}")
+            logger.warning(f"Stacking ensemble failed: {e} — skipping.")
 
-        # Threshold optimisation (Step 6) — find Youden-optimal threshold and log it
+        # Soft voting ensemble — all models vote together
+        try:
+            voting_result = self.build_soft_voting_ensemble(tuned_results, X, y, X_val, y_val)
+            tuned_results['soft_voting'] = voting_result
+            current_best_auc = self.evaluate_model(best_model, X_val, y_val)['roc_auc']
+            if voting_result['val_metrics']['roc_auc'] > current_best_auc:
+                logger.info(f"Soft voting ({voting_result['val_metrics']['roc_auc']:.4f}) "
+                            f"beats current best ({current_best_auc:.4f}).")
+                best_model = voting_result['best_estimator']
+                best_model_name = 'soft_voting'
+        except Exception as e:
+            logger.warning(f"Soft voting ensemble failed: {e} — skipping.")
+
+        # Threshold optimisation on val set (before combining train+val)
         optimal_threshold = self.optimize_threshold(best_model, X_val, y_val)
         logger.info(f"Optimal decision threshold: {optimal_threshold:.4f} (default 0.5)")
 
-        # Get final validation metrics
+        # Retrain winner on train+val combined — more data = better generalisation
+        logger.info("Retraining best model on train + val combined...")
+        X_trainval = np.vstack([X, X_val])
+        y_trainval = np.concatenate([y, y_val])
+        best_model.fit(X_trainval, y_trainval)
+        logger.info(f"Retrained on {len(y_trainval)} samples (train + val)")
+
+        # Get final validation metrics (computed before combining for honest reporting)
         final_metrics = self.evaluate_model(best_model, X_val, y_val)
         final_metrics['optimal_threshold'] = optimal_threshold
 

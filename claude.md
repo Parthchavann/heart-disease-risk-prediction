@@ -440,135 +440,156 @@ Development:
 
 ---
 
-## ✅ Current Progress (as of 2026-03-06)
+## ✅ Completed Work (chronological)
 
-### Completed
-- [x] Full project structure initialized
-- [x] UCI Heart Disease dataset downloaded (`data/raw/`)
-- [x] Data cleaning, feature engineering (17 features), train/val/test split
-- [x] XGBoost model trained — **Validation ROC-AUC: 0.9561, Test ROC-AUC: 0.8706**
-- [x] SHAP explainability working — plots saved in `logs/explainability_plots/`
-- [x] LLM layer implemented with **multi-provider support**:
-  - `ollama` (Gemma2 local, no API key) — currently active
-  - `gemini` (production, add `GEMINI_API_KEY` when ready)
-  - `openai` (fallback, key stored but quota exhausted)
-- [x] FastAPI server with `/predict`, `/health`, `/model/info` endpoints
-- [x] Prediction pipeline end-to-end working (`success: true`)
-- [x] Personalised LLM disclaimer generated per prediction
-- [x] **46/46 tests passing** (full test suite: all modules covered)
-- [x] Full pipeline script (`scripts/run_full_pipeline.py`) runs 8/8 steps
-- [x] Waterfall plot fixed — now uses explanation dict's shap_values directly
+### Phase 1 — Foundation
+- [x] Full project structure initialised (`src/`, `api/`, `config/`, `utils/`, `tests/`, `scripts/`)
+- [x] UCI Heart Disease dataset downloaded from 4 locations — **920 total samples**
+- [x] Data cleaning: missing value imputation, IQR outlier removal, type validation
+- [x] Feature engineering: 13 original → **17 features** (added `age_group`, `bp_chol_ratio`, `hr_reserve`, `multiple_risk_factors`)
+- [x] Train / val / test split: 644 / 138 / 138 (stratified)
+- [x] Transformers saved: `data/processed/transformers/` (scaler, label encoders, imputers)
+
+### Phase 2 — ML Pipeline
+- [x] Baseline models: Logistic Regression, Decision Tree
+- [x] Advanced models: Random Forest, SVM, LightGBM (GridSearchCV, 5-fold stratified CV)
+- [x] XGBoost tuned via **Optuna** (150 trials, Bayesian search) — avoids Windows crash from n_jobs=-1
+- [x] Stacking ensemble **removed** — unnecessary complexity for 920-sample dataset
+- [x] Youden-J optimal threshold computed on val set and stored in metadata
+- [x] **Best model: SVM** (GridSearch winner across all comparisons)
+  - Val:  AUC=0.845, Acc=81.2%, Recall=82.9%
+  - Test: AUC=0.904, Acc=84.8%, Recall=92.1%, F1=87.0%
+- [x] Model saved: `data/models/best_model.pkl` + `best_model_metadata.json`
+
+### Phase 3 — Explainability
+- [x] SHAP explainability module (`src/explainability.py`) — TreeExplainer / LinearExplainer
+- [x] Waterfall, force, and summary plots saved in `logs/explainability_plots/`
+- [x] Per-prediction risk factors and protective factors extracted
+
+### Phase 4 — LLM Layer
+- [x] Multi-provider LLM layer (`src/llm_layer.py`):
+  - `ollama` — Gemma2 local (active, no API key needed)
+  - `gemini` — production-ready (add `GEMINI_API_KEY`)
+  - `openai` — fallback (key stored, quota exhausted)
+- [x] Patient-friendly explanations + personalised disclaimer per prediction
+
+### Phase 5 — API & Frontend
+- [x] FastAPI server (`api/main.py`) with endpoints: `POST /predict`, `GET /health`, `GET /model/info`
+- [x] End-to-end prediction pipeline working (`success: true`)
 - [x] Streamlit dashboard (`app.py`) — risk gauge, SHAP bar chart, LLM explanation
 - [x] Docker containerisation (`Dockerfile` + `docker-compose.yml`)
 
-### Known Working State
-- **LLM Provider**: `ollama` with `gemma2:latest` (9.2B, Q4_0)
-- **Best Model**: XGBoost saved at `data/models/best_model.pkl`
-- **Processed data**: `data/processed/train.csv`, `val.csv`, `test.csv`
-- **Transformers**: `data/processed/transformers/` (scaler, label encoders, imputers)
+### Phase 6 — Testing & Quality
+- [x] 46/46 tests passing (full test suite across all modules)
+- [x] Full pipeline script (`scripts/run_full_pipeline.py`) — 8/8 steps pass
 
-### Key Bugs Fixed
+### Key Bugs Fixed (for reference)
 - `ModuleNotFoundError: config` — fixed via `PYTHONPATH=.`
 - `UnicodeEncodeError` on Windows — replaced emoji with ASCII in pipeline script
-- `IndexError` in SHAP/evaluation — feature names mismatch (13 vs 17 features) fixed
-- `NameError: List` in prediction_service — missing typing import fixed
-- `y contains previously unseen labels` — LabelEncoder handles unseen values gracefully
-- `age_group missing at fit time` — `pd.cut` categorical dtype converted to string before encoding
-- OpenAI v0.x API → v1.x migration (`ChatCompletion.create` → `chat.completions.create`)
-- `LLM_MODEL=gpt-4` → `gpt-4o` (gpt-4 not accessible on current plan)
-- `test_save_and_load_model` overwrites `best_model.pkl` — fixed by redirecting MODELS_DIR to tmp_path
-- Waterfall plot `ValueError: Explainer and SHAP values required` — fixed to use explanation dict
-- `test_predict_batch_empty` returned 200 — fixed with `min_length=1` on `patients` field
-- `test_init_without_api_key` failed when Ollama running — test now provider-aware
+- Feature mismatch 13 vs 17 in SHAP/evaluation — fixed
+- LabelEncoder unseen labels — graceful fallback
+- OpenAI v0→v1 API migration (`chat.completions.create`)
+- `test_save_and_load_model` corrupting `best_model.pkl` — fixed with `tmp_path`
+- Waterfall plot `ValueError` — uses explanation dict shap_values directly
+- Batch endpoint accepting empty list — fixed with `min_length=1`
+- XGBoost GridSearchCV Windows crash (n_jobs=-1 + Python 3.13) — XGBoost moved to Optuna only
 
 ---
 
 ## 🚀 How to Resume This Project
 
-### Step 1 — Start Ollama (must be running for Gemma2)
-Ollama runs as a background service. Check if it's running:
+### Step 1 — Start Ollama (required for LLM)
 ```cmd
 curl http://localhost:11434/api/tags
 ```
-If not running, start it:
-```cmd
-ollama serve
-```
+If not running: `ollama serve`
 
-### Step 2 — Start the API server
+### Step 2 — Start the API
 ```cmd
 cd "C:\Users\Parth Chavan\heart-disease-risk-prediction"
 set PYTHONPATH=. && python api/main.py
 ```
+Swagger UI: `http://localhost:8000/docs`
 
-### Step 3 — Test the API
-Open browser: `http://localhost:8000/docs`
-
-Use this sample request body for `POST /predict`:
+### Step 3 — Sample predict request
 ```json
 {
   "patient_data": {
-    "age": 55,
-    "sex": 1,
-    "cp": 3,
-    "trestbps": 140,
-    "chol": 250,
-    "fbs": 0,
-    "restecg": 1,
-    "thalach": 150,
-    "exang": 1,
-    "oldpeak": 2.5,
-    "slope": 1,
-    "ca": 1,
-    "thal": 2
+    "age": 55, "sex": 1, "cp": 3, "trestbps": 140, "chol": 250,
+    "fbs": 0, "restecg": 1, "thalach": 150, "exang": 1,
+    "oldpeak": 2.5, "slope": 1, "ca": 1, "thal": 2
   },
-  "options": {
-    "include_explanation": true,
-    "include_llm_explanation": true
-  }
+  "options": { "include_explanation": true, "include_llm_explanation": true }
 }
 ```
-Note: Response takes 30-60 seconds (Gemma2 running locally).
+Note: Response takes 30-60 s (Gemma2 local).
 
-### Re-run Full Pipeline (if needed)
+### Streamlit Dashboard
 ```cmd
-cd "C:\Users\Parth Chavan\heart-disease-risk-prediction"
-set PYTHONPATH=. && python scripts/run_full_pipeline.py
-```
-
----
-
-## 📋 Next Steps (Remaining Work)
-
-### Priority 1 — Production Switch (when ready)
-- [ ] **Switch LLM to Gemini**: Get free API key from https://aistudio.google.com → update `.env`:
-  ```
-  LLM_PROVIDER=gemini
-  LLM_MODEL=gemini-1.5-pro
-  GEMINI_API_KEY=your-key-here
-  ```
-  Then run: `pip install google-generativeai`
-
-### Priority 2 — Production Hardening
-- [ ] Add response caching to reduce Gemma2 latency
-- [ ] Switch to async Ollama calls so API doesn't block during LLM generation
-- [ ] Add model retraining script trigger via API endpoint
-
-### Priority 3 — Deployment
-- [ ] Deploy to cloud (AWS/GCP/Azure) using `Dockerfile` + `docker-compose.yml`
-- [ ] Set up CI/CD pipeline
-- [ ] Add Prometheus + Grafana monitoring
-
-### How to Run Streamlit Dashboard
-```cmd
-cd "C:\Users\Parth Chavan\heart-disease-risk-prediction"
 set PYTHONPATH=. && streamlit run app.py
 ```
-Open: http://localhost:8501
+Open: `http://localhost:8501`
 
-### How to Run with Docker
+### Docker
 ```cmd
 docker-compose up --build
 ```
-- API: http://localhost:8000/docs
-- Streamlit: http://localhost:8501
+API: `http://localhost:8000/docs` | Streamlit: `http://localhost:8501`
+
+### Re-run Full Pipeline (if data/model need refresh)
+```cmd
+set PYTHONPATH=. && python scripts/run_full_pipeline.py
+```
+IMPORTANT: After running the pipeline, always retrain the model immediately —
+the pipeline re-splits data, which makes any previously saved model misaligned.
+
+---
+
+## 📋 Remaining Work (do in this order)
+
+### STEP 1 — Verify tests still pass after model_training.py cleanup
+```cmd
+set PYTHONPATH=. && python -m pytest tests/ -v
+```
+Expected: 46/46 pass. Fix any failures before proceeding.
+
+### STEP 2 — Fix optimal_threshold None bug in prediction_service.py
+The `optimal_threshold` stored in `best_model_metadata.json` can be `None`
+(if `optimize_threshold` returns None). `prediction_service.py` line ~148 does:
+```python
+threshold = self.model_metadata.get('optimal_threshold', 0.5)
+```
+`dict.get()` returns `None` (not 0.5) when the key exists with value `None`.
+Fix: `threshold = self.model_metadata.get('optimal_threshold') or 0.5`
+
+### STEP 3 — Switch LLM to Gemini (production, faster than Gemma2)
+1. Get free API key: https://aistudio.google.com
+2. Update `.env`:
+   ```
+   LLM_PROVIDER=gemini
+   LLM_MODEL=gemini-1.5-pro
+   GEMINI_API_KEY=your-key-here
+   ```
+3. Install: `pip install google-generativeai`
+4. Test: restart API and call `/predict` — response should be <5 s instead of 30-60 s
+
+### STEP 4 — Async Ollama calls (remove API blocking)
+Currently `prediction_service.py` calls the LLM synchronously, blocking FastAPI for 30-60 s.
+Fix: make `generate_llm_explanation` async and use `httpx.AsyncClient` for Ollama calls.
+This lets the API serve other requests while Gemma2 generates.
+
+### STEP 5 — Response caching (reduce repeated LLM calls)
+Add an in-memory cache (e.g. `functools.lru_cache` or `cachetools.TTLCache`) keyed on
+a hash of (risk_level, top-3 risk factors). Identical risk profiles reuse cached LLM output.
+
+### STEP 6 — Cloud deployment
+Use existing `Dockerfile` + `docker-compose.yml`.
+Recommended path: push image to Docker Hub → deploy on Railway / Render (free tier) or AWS ECS.
+Set env vars (`GEMINI_API_KEY`, `LLM_PROVIDER=gemini`) in the cloud dashboard.
+No code changes needed — Docker setup is production-ready.
+
+### STEP 7 (optional) — Monitoring
+Add Prometheus metrics endpoint + Grafana dashboard for:
+- Request count / latency
+- Model prediction distribution (% High / Moderate / Low risk)
+- LLM response time

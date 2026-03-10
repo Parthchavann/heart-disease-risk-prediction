@@ -145,9 +145,15 @@ class ModelExplainer:
         # Get SHAP values for this sample
         shap_values_single = self.explainer.shap_values(X_sample)
 
-        # Handle binary classification
+        # Handle list output from binary classifiers (list of 2 arrays)
         if isinstance(shap_values_single, list) and len(shap_values_single) == 2:
             shap_values_single = shap_values_single[1]
+
+        shap_values_single = np.array(shap_values_single)
+
+        # Handle 3D output (n_samples, n_features, n_classes) from KernelExplainer
+        if shap_values_single.ndim == 3:
+            shap_values_single = shap_values_single[:, :, 1]  # positive class
 
         # Get SHAP values for the single sample
         if shap_values_single.ndim > 1:
