@@ -14,10 +14,10 @@ from config.settings import settings
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Heart Risk AI", page_icon="🫀", layout="wide",
-                   initial_sidebar_state="collapsed")
+                   initial_sidebar_state="auto")
 
 # ── Session state ─────────────────────────────────────────────────────────────
-for k, v in {"page": "landing", "result": None, "inputs": {}}.items():
+for k, v in {"page": "landing", "result": None, "inputs": {}, "history": []}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -32,7 +32,6 @@ html, body, [class*="css"], .stApp { font-family: 'Inter', sans-serif !important
 /* ── Hide chrome ── */
 #MainMenu, footer, header, [data-testid="stToolbar"],
 [data-testid="stDecoration"], [data-testid="collapsedControl"] { display:none !important; }
-[data-testid="stSidebar"] { display: none !important; }
 
 /* ── Canvas ── */
 .stApp { background: #f0f2f8; }
@@ -142,6 +141,52 @@ div[data-testid="stRadio"] input { position: absolute; opacity: 0; pointer-event
 [data-testid="stMetric"] { background: white; border-radius: 12px; padding: 1rem; }
 [data-testid="stMetricValue"] { font-size: 1.5rem !important; font-weight: 700 !important; color: #111827 !important; }
 [data-testid="stMetricLabel"] { font-size: .78rem !important; color: #6b7280 !important; text-transform: uppercase; letter-spacing: .05em; }
+
+/* ── Slider value label ── */
+[data-testid="stSlider"] [data-testid="stTickBarMin"],
+[data-testid="stSlider"] [data-testid="stTickBarMax"],
+[data-testid="stSlider"] p { color: #374151 !important; }
+
+/* ── Select slider ── */
+[data-testid="stSelectSlider"] p,
+[data-testid="stSelectSlider"] span { color: #374151 !important; }
+[data-baseweb="select"] span,
+[data-baseweb="select"] div { color: #111827 !important; }
+
+/* ── Toggle ── */
+[data-testid="stToggle"] p,
+[data-testid="stToggle"] span { color: #374151 !important; }
+
+/* ── General text in white card contexts ── */
+.stApp p { color: #374151; }
+.stApp label { color: #374151 !important; }
+
+/* ── Expander header text ── */
+[data-testid="stExpander"] summary p,
+[data-testid="stExpander"] summary span { color: #374151 !important; }
+
+/* ── DataFrame text ── */
+[data-testid="stDataFrame"] { color: #111827; }
+
+/* ── Sidebar history panel ── */
+[data-testid="stSidebar"] {
+  background: #1e1b4b !important;
+  border-right: 1px solid rgba(99,102,241,.2) !important;
+}
+[data-testid="stSidebar"] * { color: #e0e7ff !important; }
+[data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 { color: #c7d2fe !important; }
+[data-testid="stSidebar"] .stButton > button {
+  background: rgba(99,102,241,.25) !important;
+  color: #e0e7ff !important;
+  border: 1px solid rgba(99,102,241,.4) !important;
+  border-radius: 8px !important; font-size: .8rem !important;
+  padding: .4rem .8rem !important;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+  background: rgba(99,102,241,.45) !important;
+}
+[data-testid="stSidebarCollapseButton"] { display: none !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -187,16 +232,50 @@ def gauge(prob: float, level: str) -> go.Figure:
     return fig
 
 
+DISPLAY_NAMES = {
+    "age": "Age", "sex": "Sex", "cp": "Chest Pain Type",
+    "trestbps": "Blood Pressure", "chol": "Cholesterol",
+    "fbs": "Fasting Blood Sugar", "restecg": "Resting ECG",
+    "thalach": "Max Heart Rate", "exang": "Exercise Angina",
+    "oldpeak": "ST Depression", "slope": "ST Slope",
+    "ca": "Major Vessels Blocked", "thal": "Thalassemia",
+    "age_group": "Age Group", "bp_chol_ratio": "BP-Cholesterol Load",
+    "hr_reserve": "Heart Rate Reserve", "multiple_risk_factors": "Multiple Risk Factors",
+    "age_chol": "Age × Cholesterol", "bp_hr_ratio": "BP-Heart Rate Ratio",
+    "oldpeak_exang": "ST Depression + Angina", "ca_thal_risk": "Vessel + Thalassemia Risk",
+    "cp_exang_combo": "Chest Pain + Exercise Angina",
+}
+FEATURE_UNITS = {
+    "age": "yrs", "trestbps": "mm Hg", "chol": "mg/dl",
+    "thalach": "bpm", "oldpeak": "",
+}
+BASE_FEATURES = {"age","sex","cp","trestbps","chol","fbs","restecg","thalach","exang","oldpeak","slope","ca","thal"}
+
+
+def _fmt_value(feature: str, val) -> str:
+    """Return a human-readable value string for a feature."""
+    try:
+        v = float(val)
+        unit = FEATURE_UNITS.get(feature, "")
+        # For base features show clean integer/decimal; engineered features show N/A
+        if feature in BASE_FEATURES:
+            display = str(int(v)) if v == int(v) else f"{v:.1f}"
+            return f"{display} {unit}".strip()
+        return "combined factor"
+    except Exception:
+        return str(val)
+
+
 def shap_fig(risk_fs: list, prot_fs: list) -> go.Figure:
     rows = []
     for f in (risk_fs or [])[:6]:
-        rows.append({"name": f["feature"].replace("_"," ").title(),
+        rows.append({"name": DISPLAY_NAMES.get(f["feature"], f["feature"].replace("_"," ").title()),
                      "val": abs(f["contribution"]), "col": "#ef4444",
-                     "tip": f.get("explanation",""), "raw": f["feature_value"]})
+                     "tip": f.get("explanation",""), "raw": _fmt_value(f["feature"], f["feature_value"])})
     for f in (prot_fs or [])[:4]:
-        rows.append({"name": f["feature"].replace("_"," ").title(),
+        rows.append({"name": DISPLAY_NAMES.get(f["feature"], f["feature"].replace("_"," ").title()),
                      "val": -abs(f["contribution"]), "col": "#10b981",
-                     "tip": f.get("explanation",""), "raw": f["feature_value"]})
+                     "tip": f.get("explanation",""), "raw": _fmt_value(f["feature"], f["feature_value"])})
     if not rows:
         return None
     df = pd.DataFrame(rows).sort_values("val")
@@ -230,6 +309,11 @@ def card_open(extra_style=""):
 def card_close():
     return "</div>"
 
+
+# Hide sidebar on landing and form pages
+if st.session_state.page in ("landing", "form"):
+    st.markdown("<style>[data-testid='stSidebar']{display:none!important;}</style>",
+                unsafe_allow_html=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # LANDING PAGE
@@ -581,6 +665,43 @@ if st.session_state.page == "form":
             thal = THAL_LABELS.index(thal_str)
             st.markdown("</div>", unsafe_allow_html=True)
 
+        # ── Clinical range warnings ────────────────────────────────────────────
+        warnings_list = []
+        if trestbps >= 140:
+            warnings_list.append(("Blood Pressure", f"{trestbps} mm Hg", "Stage 1+ hypertension (≥140 mm Hg). Consider lifestyle changes and consult your doctor."))
+        if chol >= 240:
+            warnings_list.append(("Cholesterol", f"{chol} mg/dl", "High cholesterol (≥240 mg/dl). Associated with increased arterial plaque risk."))
+        if chol >= 200 and chol < 240:
+            warnings_list.append(("Cholesterol", f"{chol} mg/dl", "Borderline high cholesterol (200–239 mg/dl). Diet and exercise can help."))
+        if oldpeak >= 2.0:
+            warnings_list.append(("ST Depression", f"{oldpeak}", "Significant ST depression (≥2.0). May indicate myocardial ischemia under stress."))
+        if thalach < 100:
+            warnings_list.append(("Max Heart Rate", f"{thalach} bpm", "Unusually low maximum heart rate (<100 bpm). Could indicate reduced cardiac fitness."))
+        if age >= 65 and sex == 1:
+            warnings_list.append(("Age & Sex", f"{age} yrs, Male", "Men aged 65+ have significantly elevated baseline cardiovascular risk."))
+        if ca >= 2:
+            warnings_list.append(("Major Vessels", f"{ca} blocked", "Multiple blocked vessels (≥2) is a strong indicator of coronary artery disease."))
+
+        if warnings_list:
+            st.markdown("""
+            <div style='background:#fffbeb;border:1px solid #fcd34d;border-radius:14px;
+                        padding:1.25rem 1.5rem;margin-top:.5rem;margin-bottom:1rem;'>
+              <div style='font-size:.85rem;font-weight:700;color:#92400e;margin-bottom:.75rem;
+                          display:flex;align-items:center;gap:.4rem;'>
+                ⚠️ Clinical Range Alerts
+              </div>
+            """, unsafe_allow_html=True)
+            for label, value, msg in warnings_list:
+                st.markdown(f"""
+              <div style='display:flex;gap:.75rem;margin-bottom:.6rem;align-items:flex-start;'>
+                <div style='background:#fef3c7;border-radius:8px;padding:.25rem .6rem;
+                            font-size:.75rem;font-weight:700;color:#b45309;white-space:nowrap;
+                            min-width:fit-content;'>{label}: {value}</div>
+                <div style='font-size:.8rem;color:#78350f;line-height:1.5;'>{msg}</div>
+              </div>
+                """, unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+
         # ── AI toggle + Submit ────────────────────────────────────────────────
         st.markdown("""
         <div style='background:linear-gradient(135deg,#f5f3ff,#ede9fe);border-radius:14px;
@@ -623,11 +744,53 @@ if st.session_state.page == "form":
                                          include_llm_explanation=include_llm)
                 st.session_state.result = result
                 st.session_state.page = "results"
+                # Save to in-session history (most recent first, cap at 10)
+                from datetime import datetime as _dt
+                history_entry = {
+                    "timestamp": _dt.now().strftime("%H:%M:%S"),
+                    "age": patient_data["age"],
+                    "sex": "M" if patient_data["sex"] == 1 else "F",
+                    "risk_level": result.get("risk_level", "?"),
+                    "risk_pct": round(result.get("risk_probability", 0) * 100, 1),
+                    "result": result,
+                    "inputs": dict(patient_data),
+                }
+                st.session_state.history = ([history_entry] + st.session_state.history)[:10]
                 st.rerun()
             except Exception as e:
                 st.error(f"Prediction failed: {e}")
 
     st.stop()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# SIDEBAR — Prediction History (shown on results page)
+# ═══════════════════════════════════════════════════════════════════════════════
+with st.sidebar:
+    st.markdown("### 🫀 Session History")
+    history = st.session_state.get("history", [])
+    if not history:
+        st.markdown("<p style='font-size:.82rem;color:#a5b4fc;'>No predictions yet.</p>",
+                    unsafe_allow_html=True)
+    else:
+        st.markdown(f"<p style='font-size:.78rem;color:#a5b4fc;margin-bottom:.75rem;'>"
+                    f"{len(history)} prediction{'s' if len(history) > 1 else ''} this session</p>",
+                    unsafe_allow_html=True)
+        for i, h in enumerate(history):
+            lvl = h["risk_level"]
+            dot = {"Low": "🟢", "Moderate": "🟡", "High": "🔴"}.get(lvl, "⚪")
+            label = f"{dot} {h['timestamp']}  |  Age {h['age']}{h['sex']}  |  **{lvl} {h['risk_pct']}%**"
+            if st.button(label, key=f"hist_{i}", use_container_width=True):
+                st.session_state.result = h["result"]
+                st.session_state.inputs = h["inputs"]
+                st.rerun()
+    st.markdown("---")
+    if st.button("New Assessment", use_container_width=True):
+        st.session_state.page = "form"
+        st.rerun()
+    if history and st.button("Clear History", use_container_width=True):
+        st.session_state.history = []
+        st.rerun()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -692,17 +855,17 @@ st.markdown(f"""
     <div style='background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
                 border-radius:12px;padding:.75rem 1.25rem;text-align:center;min-width:90px;'>
       <div style='font-size:1.3rem;font-weight:800;color:{RISK_COLOR};'>{risk_prob:.0%}</div>
-      <div style='font-size:.7rem;color:#64748b;margin-top:.15rem;'>Risk Score</div>
+      <div style='font-size:.7rem;color:#94a3b8;margin-top:.15rem;'>Risk Score</div>
     </div>
     <div style='background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
                 border-radius:12px;padding:.75rem 1.25rem;text-align:center;min-width:90px;'>
       <div style='font-size:1.3rem;font-weight:800;color:#60a5fa;'>0.9407</div>
-      <div style='font-size:.7rem;color:#64748b;margin-top:.15rem;'>Model AUC</div>
+      <div style='font-size:.7rem;color:#94a3b8;margin-top:.15rem;'>Model AUC</div>
     </div>
     <div style='background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);
                 border-radius:12px;padding:.75rem 1.25rem;text-align:center;min-width:90px;'>
       <div style='font-size:1.3rem;font-weight:800;color:#a78bfa;'>22</div>
-      <div style='font-size:.7rem;color:#64748b;margin-top:.15rem;'>Features Used</div>
+      <div style='font-size:.7rem;color:#94a3b8;margin-top:.15rem;'>Features Used</div>
     </div>
   </div>
 </div>
@@ -885,16 +1048,17 @@ with tab2:
                               letter-spacing:.08em;margin-bottom:1rem;'>Top Risk Factors</div>
                 """, unsafe_allow_html=True)
                 for f in risk_fs[:5]:
-                    name   = f["feature"].replace("_"," ").title()
+                    name   = DISPLAY_NAMES.get(f["feature"], f["feature"].replace("_"," ").title())
                     contrib = f["contribution"]
                     pct    = min(100, int(abs(contrib)*900))
                     tip    = f.get("explanation","")
+                    val_str = _fmt_value(f["feature"], f["feature_value"])
                     st.markdown(f"""
                     <div style='margin-bottom:.9rem;'>
                       <div style='display:flex;justify-content:space-between;align-items:baseline;
                                   margin-bottom:.3rem;'>
                         <span style='font-size:.85rem;font-weight:600;color:#111827;'>{name}</span>
-                        <span style='font-size:.82rem;font-weight:700;color:#ef4444;'>+{contrib:.4f}</span>
+                        <span style='font-size:.82rem;color:#6b7280;'>{val_str}</span>
                       </div>
                       <div style='background:#fee2e2;border-radius:99px;height:4px;'>
                         <div style='background:#ef4444;border-radius:99px;height:4px;width:{pct}%;'></div>
@@ -913,16 +1077,17 @@ with tab2:
                               letter-spacing:.08em;margin-bottom:1rem;'>Protective Factors</div>
                 """, unsafe_allow_html=True)
                 for f in prot_fs[:4]:
-                    name   = f["feature"].replace("_"," ").title()
+                    name    = DISPLAY_NAMES.get(f["feature"], f["feature"].replace("_"," ").title())
                     contrib = f["contribution"]
-                    pct    = min(100, int(abs(contrib)*900))
-                    tip    = f.get("explanation","")
+                    pct     = min(100, int(abs(contrib)*900))
+                    tip     = f.get("explanation","")
+                    val_str = _fmt_value(f["feature"], f["feature_value"])
                     st.markdown(f"""
                     <div style='margin-bottom:.9rem;'>
                       <div style='display:flex;justify-content:space-between;align-items:baseline;
                                   margin-bottom:.3rem;'>
                         <span style='font-size:.85rem;font-weight:600;color:#111827;'>{name}</span>
-                        <span style='font-size:.82rem;font-weight:700;color:#10b981;'>{contrib:.4f}</span>
+                        <span style='font-size:.82rem;color:#6b7280;'>{val_str}</span>
                       </div>
                       <div style='background:#d1fae5;border-radius:99px;height:4px;'>
                         <div style='background:#10b981;border-radius:99px;height:4px;width:{pct}%;'></div>

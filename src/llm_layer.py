@@ -50,7 +50,11 @@ _LLM_CACHE_TTL_SECONDS: int = 3600  # 1 hour
 
 
 def _cache_key(risk_level: str, risk_factors: List[Dict[str, Any]]) -> str:
-    top3 = sorted(f.get('feature', '') for f in risk_factors[:3])
+    # Include feature name + rounded value so different measurements get different responses
+    top3 = sorted(
+        f"{f.get('feature', '')}:{round(float(f.get('feature_value', 0)), 1)}"
+        for f in risk_factors[:3]
+    )
     raw = f"{risk_level}|{'|'.join(top3)}"
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -229,42 +233,46 @@ Remember: You are providing educational information only, not medical diagnosis 
 
         risk_level = self._determine_risk_level(risk_probability)
 
-        # Prepare risk factors text
+        # Prepare risk factors text with actual values
         risk_factors_text = ""
         if risk_factors:
-            risk_factors_text = "Key factors contributing to your risk include:\n"
-            for factor in risk_factors[:3]:  # Top 3
+            risk_factors_text = "Key factors contributing to your risk:\n"
+            for factor in risk_factors[:3]:
                 factor_name = factor.get('feature', 'Unknown factor')
+                val = factor.get('feature_value', '')
                 explanation = RISK_FACTOR_EXPLANATIONS.get(factor_name,
                                                          f"The {factor_name} measurement")
-                risk_factors_text += f"- {explanation}\n"
+                val_str = f" (your value: {round(float(val), 2)})" if isinstance(val, (int, float)) else ""
+                risk_factors_text += f"- {explanation}{val_str}\n"
 
         # Prepare protective factors text
         protective_factors_text = ""
         if protective_factors:
-            protective_factors_text = "Factors working in your favor include:\n"
-            for factor in protective_factors[:2]:  # Top 2
+            protective_factors_text = "Factors working in your favor:\n"
+            for factor in protective_factors[:2]:
                 factor_name = factor.get('feature', 'Unknown factor')
+                val = factor.get('feature_value', '')
                 explanation = RISK_FACTOR_EXPLANATIONS.get(factor_name,
                                                          f"The {factor_name} measurement")
-                protective_factors_text += f"- {explanation} appears to be protective\n"
+                val_str = f" (your value: {round(float(val), 2)})" if isinstance(val, (int, float)) else ""
+                protective_factors_text += f"- {explanation}{val_str} appears protective\n"
+
+        age = (patient_context or {}).get('age', '')
+        sex = 'male' if (patient_context or {}).get('sex') == 1 else 'female' if (patient_context or {}).get('sex') == 0 else ''
+        patient_line = f"Patient: {age}-year-old {sex}".strip() if age or sex else ""
 
         prompt = f"""
-Please explain the following heart disease risk assessment results in patient-friendly language:
+Please explain the following heart disease risk assessment in warm, patient-friendly language:
 
+{patient_line}
 Risk Level: {risk_level}
 Risk Probability: {risk_probability:.1%}
 
 {risk_factors_text}
-
 {protective_factors_text}
 
-Please provide:
-1. A clear, reassuring explanation of what this risk level means
-2. Context about how this assessment works
-3. Emphasis on the educational nature of this tool
-
-Keep the explanation warm, supportive, and educational.
+In 2-3 sentences: explain what this risk level means for this specific patient given their
+actual measurements, and reassure them this is educational, not a diagnosis.
 """
 
         return self._make_llm_request(prompt)
@@ -275,27 +283,64 @@ Keep the explanation warm, supportive, and educational.
         """Generate personalized lifestyle recommendations."""
 
         risk_level = self._determine_risk_level(risk_probability)
+        patient_context = patient_context or {}
 
-        # Identify key modifiable risk factors
-        modifiable_factors = []
-        for factor in risk_factors:
-            feature = factor.get('feature', '')
-            if feature in ['chol', 'trestbps', 'fbs', 'thalach', 'oldpeak']:
-                modifiable_factors.append(feature)
+        # Build a human-readable profile from patient values
+        FEATURE_LABELS = {
+            'age': ('Age', 'years'), 'trestbps': ('Resting blood pressure', 'mm Hg'),
+            'chol': ('Serum cholesterol', 'mg/dl'), 'thalach': ('Max heart rate', 'bpm'),
+            'oldpeak': ('ST depression', ''), 'fbs': ('Fasting blood sugar >120', ''),
+            'ca': ('Major vessels blocked', ''), 'thal': ('Thalassemia type', ''),
+            'cp': ('Chest pain type', ''), 'exang': ('Exercise angina', ''),
+        }
+
+        # Patient measurements from context
+        patient_profile_lines = []
+        for key, (label, unit) in FEATURE_LABELS.items():
+            val = patient_context.get(key)
+            if val is not None:
+                patient_profile_lines.append(f"  - {label}: {val} {unit}".strip())
+
+        patient_profile = "\n".join(patient_profile_lines) if patient_profile_lines else "  Not provided"
+
+        # Top risk factors with actual values
+        risk_factor_lines = []
+        for f in risk_factors[:5]:
+            name = f.get('feature', '').replace('_', ' ')
+            val = f.get('feature_value', '')
+            contrib = f.get('contribution', 0)
+            tip = f.get('explanation', '')
+            risk_factor_lines.append(
+                f"  - {name} = {round(float(val), 2) if isinstance(val, (int, float)) else val}"
+                f" (SHAP contribution: +{contrib:.3f})"
+                + (f" — {tip}" if tip else "")
+            )
+
+        risk_factors_text = "\n".join(risk_factor_lines) if risk_factor_lines else "  None identified"
 
         prompt = f"""
-Based on a {risk_level} cardiovascular risk assessment, please provide 5-7 specific,
-actionable lifestyle recommendations. The key risk factors identified include: {', '.join(modifiable_factors[:3])}.
+A patient has received a {risk_level} cardiovascular risk assessment ({risk_probability:.1%} probability).
 
-Please provide recommendations that are:
-- Specific and actionable
-- Evidence-based
-- Suitable for general health improvement
-- Encouraging and positive
-- Appropriate for someone with {risk_level.lower()} cardiovascular risk
+Patient profile:
+{patient_profile}
 
-Focus on diet, exercise, stress management, and general wellness.
-Format as a simple list.
+Top contributing risk factors (with actual measured values):
+{risk_factors_text}
+
+Please provide 5-7 specific, personalised lifestyle recommendations that directly address
+THIS patient's actual measurements and risk factors above. For example:
+- If their cholesterol is high, give specific dietary advice targeting cholesterol reduction
+- If their blood pressure is elevated, give targeted BP-lowering tips
+- If they have exercise angina, tailor exercise advice accordingly
+- If ST depression is elevated, address cardiac rehabilitation
+
+Requirements:
+- Tie each recommendation to at least one of their actual measurements
+- Be specific (e.g. "aim for cholesterol below 200 mg/dl" not just "eat healthy")
+- Be encouraging and positive
+- Appropriate urgency for {risk_level.lower()} risk
+
+Format: numbered list, one recommendation per line, no sub-bullets.
 """
 
         response = self._make_llm_request(prompt)
@@ -325,23 +370,36 @@ Format as a simple list.
         """Generate relevant questions for doctor consultation."""
 
         risk_level = self._determine_risk_level(risk_probability)
+        patient_context = patient_context or {}
 
-        # Key risk factors for question generation
-        key_factors = [factor.get('feature', '') for factor in risk_factors[:3]]
+        # Top risk factors with values
+        factor_lines = []
+        for f in risk_factors[:4]:
+            name = f.get('feature', '').replace('_', ' ')
+            val = f.get('feature_value', '')
+            tip = f.get('explanation', '')
+            factor_lines.append(
+                f"  - {name} = {round(float(val), 2) if isinstance(val, (int, float)) else val}"
+                + (f" ({tip})" if tip else "")
+            )
+        factors_text = "\n".join(factor_lines) if factor_lines else "  None identified"
+
+        age = patient_context.get('age', 'unknown')
+        sex = 'male' if patient_context.get('sex') == 1 else 'female' if patient_context.get('sex') == 0 else 'unknown'
 
         prompt = f"""
-A person has received a {risk_level} cardiovascular risk assessment. The main contributing
-factors are: {', '.join(key_factors)}.
+A {age}-year-old {sex} patient has received a {risk_level} cardiovascular risk assessment
+({risk_probability:.1%} probability).
 
-Please suggest 5-6 specific, relevant questions this person should ask their doctor during
-their next appointment. The questions should:
-- Be directly related to cardiovascular health
-- Help them understand their personal risk
-- Lead to actionable medical advice
-- Be appropriate for their risk level
-- Cover both assessment validation and prevention strategies
+Their top contributing risk factors are:
+{factors_text}
 
-Format as a simple list of questions.
+Suggest 5-6 specific questions they should ask their doctor that are directly relevant to
+THEIR measurements above. For example, if their thalassemia type is abnormal, ask about it.
+If their blood pressure is high, ask about targets. If ST depression is present, ask about
+exercise stress testing.
+
+Format: numbered list of questions, one per line.
 """
 
         response = self._make_llm_request(prompt)
@@ -488,8 +546,11 @@ Write only the disclaimer text, no headings or labels.
             'medical_disclaimer': disclaimer
         }
 
-        # Store in cache for reuse
-        _cache_set(ck, comprehensive_explanation)
+        # Only cache if LLM actually responded (not fallback static text)
+        fallback_markers = ["consult with your healthcare provider to discuss", "Please review the detailed results"]
+        is_fallback = any(m in risk_explanation for m in fallback_markers)
+        if not is_fallback:
+            _cache_set(ck, comprehensive_explanation)
 
         return comprehensive_explanation
 

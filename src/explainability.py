@@ -132,7 +132,8 @@ class ModelExplainer:
         return sorted_importance
 
     def explain_single_prediction(self, X_sample: np.ndarray,
-                                 prediction_proba: float) -> Dict[str, Any]:
+                                 prediction_proba: float,
+                                 original_patient_data: Dict[str, Any] = None) -> Dict[str, Any]:
         """Explain a single prediction."""
 
         if self.explainer is None:
@@ -161,35 +162,43 @@ class ModelExplainer:
         else:
             sample_shap = shap_values_single
 
+        # Use actual feature count from SHAP output (handles 22-feature models)
+        n_features = len(sample_shap)
+        feature_names = self.feature_names[:n_features] if len(self.feature_names) >= n_features \
+            else self.feature_names + [f"feature_{i}" for i in range(len(self.feature_names), n_features)]
+
         # Create feature contributions
         feature_contributions = {}
         risk_factors = []
         protective_factors = []
 
-        for i, feature in enumerate(self.feature_names):
-            if i < len(sample_shap):
-                contribution = float(sample_shap[i])
+        for i, feature in enumerate(feature_names):
+            contribution = float(sample_shap[i])
+            # Use original patient value for the 13 base features, scaled value for engineered ones
+            if original_patient_data and feature in original_patient_data:
+                feature_value = float(original_patient_data[feature])
+            else:
                 feature_value = float(X_sample[0][i])
 
-                feature_contributions[feature] = {
-                    'shap_value': contribution,
+            feature_contributions[feature] = {
+                'shap_value': contribution,
+                'feature_value': feature_value,
+                'impact': 'increases_risk' if contribution > 0 else 'decreases_risk'
+            }
+
+            # Lower threshold to catch more protective factors
+            if abs(contribution) > 0.005:
+                factor_info = {
+                    'feature': feature,
+                    'contribution': contribution,
                     'feature_value': feature_value,
-                    'impact': 'increases_risk' if contribution > 0 else 'decreases_risk'
+                    'explanation': RISK_FACTOR_EXPLANATIONS.get(feature, f"{feature.replace('_', ' ').title()} affects cardiovascular risk")
                 }
 
-                # Categorize as risk or protective factor
-                if abs(contribution) > 0.01:  # Threshold for significance
-                    factor_info = {
-                        'feature': feature,
-                        'contribution': contribution,
-                        'feature_value': feature_value,
-                        'explanation': RISK_FACTOR_EXPLANATIONS.get(feature, f"Feature {feature} affects risk")
-                    }
-
-                    if contribution > 0:
-                        risk_factors.append(factor_info)
-                    else:
-                        protective_factors.append(factor_info)
+                if contribution > 0:
+                    risk_factors.append(factor_info)
+                else:
+                    protective_factors.append(factor_info)
 
         # Sort by absolute contribution
         risk_factors.sort(key=lambda x: abs(x['contribution']), reverse=True)
@@ -347,8 +356,8 @@ class ModelExplainer:
                                  model_name: str = "Model") -> Dict[str, Any]:
         """Create comprehensive explanation report for a prediction."""
 
-        # Get detailed explanation
-        explanation = self.explain_single_prediction(X_sample, prediction_proba)
+        # Get detailed explanation (pass original patient data for readable feature values)
+        explanation = self.explain_single_prediction(X_sample, prediction_proba, patient_data)
 
         # Generate plots
         plots = {}
@@ -368,24 +377,10 @@ class ModelExplainer:
             'detailed_explanation': explanation,
             'text_explanation': text_explanation,
             'plots': plots,
-            'confidence_interval': self._calculate_confidence_interval(prediction_proba),
             'medical_disclaimer': settings.MEDICAL_DISCLAIMER
         }
 
         return report
-
-    def _calculate_confidence_interval(self, prediction_proba: float,
-                                     confidence_level: float = 0.95) -> Tuple[float, float]:
-        """Calculate confidence interval for prediction (simplified)."""
-
-        # This is a simplified confidence interval calculation
-        # In practice, you'd want to use bootstrap or other methods
-        margin = 0.1  # Simplified margin of error
-
-        lower = max(0.0, prediction_proba - margin)
-        upper = min(1.0, prediction_proba + margin)
-
-        return (lower, upper)
 
     def save_explanation(self, report: Dict[str, Any], sample_id: str = None) -> str:
         """Save explanation report to file."""

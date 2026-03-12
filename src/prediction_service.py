@@ -55,8 +55,13 @@ class HeartDiseasePredictionService:
             # Load background data for SHAP explainer
             self._load_background_data()
 
-            # Initialize explainer
+            # Initialize explainer — set feature names from actual background data columns
             self.explainer = ModelExplainer()
+            train_path = os.path.join(settings.PROCESSED_DATA_DIR, "train.csv")
+            if os.path.exists(train_path):
+                import pandas as _pd
+                _train_df = _pd.read_csv(train_path)
+                self.explainer.feature_names = [c for c in _train_df.columns if c != 'target']
             self.explainer.initialize_explainer(self.model, self.background_data)
             logger.info("Explainer initialized")
 
@@ -100,17 +105,38 @@ class HeartDiseasePredictionService:
         else:
             return RiskLevel.LOW
 
-    def _calculate_confidence_interval(self, risk_probability: float) -> Tuple[float, float]:
-        """Calculate confidence interval for the prediction."""
+    def _calculate_confidence_interval(self, risk_probability: float,
+                                       X: np.ndarray = None,
+                                       n_bootstrap: int = 200,
+                                       confidence_level: float = 0.95) -> Tuple[float, float]:
+        """Calculate bootstrap confidence interval for the prediction.
 
-        # Simplified confidence interval calculation
-        # In production, you might want to use bootstrap or ensemble methods
-        margin = 0.1  # 10% margin of error
+        Perturbs the input with Gaussian noise (sigma=0.05) and re-runs the model
+        n_bootstrap times to build an empirical distribution of risk probabilities.
+        Falls back to a Wald interval if bootstrap fails.
+        """
+        if X is not None:
+            try:
+                rng = np.random.default_rng(42)
+                boot_probs = []
+                for _ in range(n_bootstrap):
+                    X_perturbed = X + rng.normal(0, 0.05, X.shape)
+                    prob = float(self.model.predict_proba(X_perturbed)[0][1])
+                    boot_probs.append(prob)
+                alpha = (1 - confidence_level) / 2
+                lower = float(np.quantile(boot_probs, alpha))
+                upper = float(np.quantile(boot_probs, 1 - alpha))
+                return (round(max(0.0, lower), 4), round(min(1.0, upper), 4))
+            except Exception as e:
+                logger.warning(f"Bootstrap CI failed, using Wald fallback: {e}")
 
-        lower = max(0.0, risk_probability - margin)
-        upper = min(1.0, risk_probability + margin)
-
-        return (lower, upper)
+        # Wald interval fallback (better than flat ±0.10)
+        n_eff = 100  # effective sample size approximation
+        se = float(np.sqrt(risk_probability * (1 - risk_probability) / n_eff))
+        z = 1.96  # 95% CI
+        lower = max(0.0, risk_probability - z * se)
+        upper = min(1.0, risk_probability + z * se)
+        return (round(lower, 4), round(upper, 4))
 
     def validate_input(self, patient_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         """Validate input patient data."""
@@ -250,7 +276,7 @@ class HeartDiseasePredictionService:
 
             # Step 4: Determine risk level and confidence interval
             risk_level = self._determine_risk_level(risk_probability)
-            confidence_interval = self._calculate_confidence_interval(risk_probability)
+            confidence_interval = self._calculate_confidence_interval(risk_probability, X)
 
             # Step 5: Build base result
             result = {

@@ -112,5 +112,36 @@ RISK_FACTOR_EXPLANATIONS: Dict[str, str] = {
     "oldpeak": "ST depression indicates possible ischemia during exercise",
     "slope": "Abnormal ST slope patterns suggest cardiac stress",
     "ca": "Blocked major vessels directly increase heart disease risk",
-    "thal": "Thalassemia defects affect heart muscle function"
+    "thal": "Thalassemia defects affect heart muscle function",
+    # Engineered features — human-readable descriptions
+    "age_group": "Age group category affects baseline cardiovascular risk",
+    "bp_chol_ratio": "Combined blood pressure and cholesterol burden on arteries",
+    "hr_reserve": "Heart rate reserve reflects cardiovascular fitness capacity",
+    "multiple_risk_factors": "Combination of multiple simultaneous risk factors",
+    "age_chol": "Age-cholesterol interaction — risk compounds with age",
+    "bp_hr_ratio": "Blood pressure to heart rate ratio reflects cardiac workload",
+    "oldpeak_exang": "ST depression combined with exercise angina indicates ischemia",
+    "ca_thal_risk": "Combined vessel blockage and thalassemia defect severity",
+    "cp_exang_combo": "Chest pain type combined with exercise-induced angina"
+}
+
+# Human-readable display names for features (for UI)
+FEATURE_DISPLAY_NAMES: Dict[str, str] = {
+    "age": "Age", "sex": "Sex", "cp": "Chest Pain Type",
+    "trestbps": "Resting Blood Pressure", "chol": "Cholesterol",
+    "fbs": "Fasting Blood Sugar", "restecg": "Resting ECG",
+    "thalach": "Max Heart Rate", "exang": "Exercise Angina",
+    "oldpeak": "ST Depression", "slope": "ST Slope",
+    "ca": "Major Vessels Blocked", "thal": "Thalassemia",
+    "age_group": "Age Group", "bp_chol_ratio": "BP-Cholesterol Load",
+    "hr_reserve": "Heart Rate Reserve", "multiple_risk_factors": "Multiple Risk Factors",
+    "age_chol": "Age × Cholesterol", "bp_hr_ratio": "BP-Heart Rate Ratio",
+    "oldpeak_exang": "ST Depression + Angina", "ca_thal_risk": "Vessel + Thalassemia Risk",
+    "cp_exang_combo": "Chest Pain + Exercise Angina",
+}
+
+# Feature units for display
+FEATURE_UNITS: Dict[str, str] = {
+    "age": "years", "trestbps": "mm Hg", "chol": "mg/dl",
+    "thalach": "bpm", "oldpeak": "",
 }

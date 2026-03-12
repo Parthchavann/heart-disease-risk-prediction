@@ -270,40 +270,60 @@ class DataProcessor:
         return df_processed
 
     def split_data(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-        """Split data into train, validation, and test sets."""
+        """Split data into train, validation, and test sets.
+
+        If a 'source' column is present (set by download_data.py), synthetic rows
+        (source == 'synthetic_ctgan') are kept exclusively in the training set so that
+        val/test metrics are computed only on real clinical data.
+        """
 
         logger.info("Splitting data...")
 
-        # Separate features and target
-        X = df.drop('target', axis=1)
-        y = df['target']
+        # Separate synthetic from real if source column is available
+        has_source = 'source' in df.columns
+        if has_source:
+            synthetic_mask = df['source'] == 'synthetic_ctgan'
+            synthetic_df = df[synthetic_mask].drop(columns=['source'])
+            real_df = df[~synthetic_mask].drop(columns=['source'])
+            logger.info(f"  Real samples: {len(real_df)}, Synthetic (train-only): {len(synthetic_df)}")
+        else:
+            real_df = df
+            synthetic_df = pd.DataFrame(columns=df.columns)
 
-        # First split: train+val and test
+        # Split real data into train+val and test
+        X_real = real_df.drop('target', axis=1)
+        y_real = real_df['target']
+
         X_temp, X_test, y_temp, y_test = train_test_split(
-            X, y,
+            X_real, y_real,
             test_size=settings.TEST_SIZE,
             random_state=settings.RANDOM_STATE,
-            stratify=y
+            stratify=y_real
         )
 
-        # Second split: train and validation
+        # Second split: train and validation (from real data only)
         val_size_adjusted = settings.VAL_SIZE / (1 - settings.TEST_SIZE)
-        X_train, X_val, y_train, y_val = train_test_split(
+        X_train_real, X_val, y_train_real, y_val = train_test_split(
             X_temp, y_temp,
             test_size=val_size_adjusted,
             random_state=settings.RANDOM_STATE,
             stratify=y_temp
         )
 
-        # Create DataFrames
-        train_df = pd.concat([X_train, y_train], axis=1)
+        # Combine real train portion with all synthetic rows
+        train_real_df = pd.concat([X_train_real, y_train_real], axis=1)
+        if not synthetic_df.empty:
+            train_df = pd.concat([train_real_df, synthetic_df], ignore_index=True)
+        else:
+            train_df = train_real_df
+
         val_df = pd.concat([X_val, y_val], axis=1)
         test_df = pd.concat([X_test, y_test], axis=1)
 
         logger.info(f"Data split completed:")
-        logger.info(f"  Train: {train_df.shape[0]} samples")
-        logger.info(f"  Validation: {val_df.shape[0]} samples")
-        logger.info(f"  Test: {test_df.shape[0]} samples")
+        logger.info(f"  Train: {train_df.shape[0]} samples (real + synthetic)")
+        logger.info(f"  Validation: {val_df.shape[0]} samples (real only)")
+        logger.info(f"  Test: {test_df.shape[0]} samples (real only)")
 
         return train_df, val_df, test_df
 

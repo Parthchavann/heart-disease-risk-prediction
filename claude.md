@@ -585,3 +585,157 @@ Add Prometheus metrics endpoint + Grafana dashboard for:
 - Request count / latency
 - Model prediction distribution (% High / Moderate / Low risk)
 - LLM response time
+
+---
+
+## 🔍 Project Review: What Was Lacking & How It Was Fixed
+
+This section documents a structured review of the working system's weaknesses, and the exact changes made to address each one.
+
+---
+
+### Gap 1 — Confidence Intervals Were Fake
+
+**What was wrong:**
+`prediction_service.py` computed confidence intervals as a hardcoded `±0.10` band around the predicted probability:
+```python
+lower = max(0.0, risk_probability - 0.10)
+upper = min(1.0, risk_probability + 0.10)
+```
+This produced identical-width intervals regardless of how certain or uncertain the model actually was. A high-confidence 92% prediction and a borderline 51% prediction would both show ±10%, which is statistically meaningless and misleading in a medical context.
+
+**What was done:**
+Replaced with **bootstrap confidence intervals** (200 perturbations, Gaussian noise σ=0.05):
+```python
+def _calculate_confidence_interval(self, risk_probability, X=None, n_bootstrap=200):
+    if X is not None:
+        rng = np.random.default_rng(42)
+        boot_probs = [float(self.model.predict_proba(X + rng.normal(0, 0.05, X.shape))[0][1])
+                      for _ in range(n_bootstrap)]
+        lower = float(np.quantile(boot_probs, 0.025))
+        upper = float(np.quantile(boot_probs, 0.975))
+        return (round(max(0.0, lower), 4), round(min(1.0, upper), 4))
+    # Wald interval fallback (n_eff=100)
+    se = np.sqrt(risk_probability * (1 - risk_probability) / 100)
+    return (round(max(0.0, risk_probability - 1.96*se), 4),
+            round(min(1.0, risk_probability + 1.96*se), 4))
+```
+The `X` matrix is now passed through from `predict()` so real perturbations are used. Result: High-risk cases show tight intervals like `(0.928, 0.940)` while uncertain borderline cases correctly show wider bands.
+
+**Files changed:** `src/prediction_service.py`
+
+---
+
+### Gap 2 — SHAP Feature Analysis Was Broken / Misleading
+
+**What was wrong (two sub-problems):**
+
+**2a. Feature names were wrong.** `ModelExplainer` defaulted to the 13-element `FEATURE_NAMES` constant, but the trained model used 22 features (13 original + 9 engineered). SHAP values for features at indices 13–21 were silently mapped to wrong names, and many protective factors (often from engineered features) were simply invisible.
+
+**2b. Feature values showed scaled numbers.** The SHAP bar chart displayed `X_sample[0][i]` which is the StandardScaler output — a z-score like `−1.23` — not the original clinical value. A cholesterol of 280 mg/dl would display as `0.87`, giving users no interpretable context.
+
+**What was done:**
+
+For 2a — `prediction_service.py` now reads the actual column list from `train.csv` at startup and assigns it to the explainer:
+```python
+train_path = os.path.join(settings.PROCESSED_DATA_DIR, "train.csv")
+if os.path.exists(train_path):
+    import pandas as _pd
+    _train_df = _pd.read_csv(train_path)
+    self.explainer.feature_names = [c for c in _train_df.columns if c != 'target']
+```
+
+For 2b — `explain_single_prediction()` now accepts `original_patient_data` and prefers those values over the scaled array:
+```python
+if original_patient_data and feature in original_patient_data:
+    feature_value = float(original_patient_data[feature])
+else:
+    feature_value = float(X_sample[0][i])
+```
+The SHAP threshold was also lowered from `0.01` to `0.005` so smaller-but-real contributions from engineered features are surfaced. Display names (e.g. "Blood Pressure", "ST Depression + Angina") and units ("mm Hg", "bpm") were added via `DISPLAY_NAMES` and `FEATURE_UNITS` dicts in `app.py`.
+
+**Files changed:** `src/prediction_service.py`, `src/explainability.py`, `app.py`, `utils/constants.py`
+
+---
+
+### Gap 3 — No Clinical Context on the Input Form
+
+**What was wrong:**
+The assessment form accepted all values silently. A user could enter a resting blood pressure of 160 mm Hg or cholesterol of 310 mg/dl with no indication that these values are clinically abnormal — before even submitting. The only feedback came after prediction, buried in the results.
+
+**What was done:**
+Added a dynamic **clinical range warning banner** in `app.py` that evaluates all inputs in real time (after the form fields are rendered, before the submit button). It appears only when at least one value is out of normal range, with labelled amber badges per condition:
+
+| Trigger | Threshold | Context shown |
+|---------|-----------|---------------|
+| Blood pressure | >= 140 mm Hg | Stage 1+ hypertension |
+| Cholesterol | >= 240 mg/dl | High risk |
+| Cholesterol | 200–239 mg/dl | Borderline |
+| ST depression | >= 2.0 | Possible ischemia |
+| Max heart rate | < 100 bpm | Low cardiac fitness |
+| Age + Male | >= 65 yrs | Elevated baseline |
+| Major vessels | >= 2 blocked | Strong CAD indicator |
+
+The banner is hidden entirely when all values are within normal ranges, so it does not add noise to healthy profiles.
+
+**Files changed:** `app.py`
+
+---
+
+### Gap 4 — Synthetic Data Leaked into Validation and Test Sets
+
+**What was wrong:**
+The pipeline generated 1,500 CTGAN synthetic samples from the real data and mixed them into a single combined CSV. `split_data()` then applied a stratified random split across all rows equally — meaning roughly 15% of synthetic rows landed in val and 15% in test. The reported Test AUC of 0.9407 and Test Accuracy of 84.9% were therefore partly measured on data generated by a model that itself learned from the training set. This is a form of indirect data leakage: the evaluation was not fully honest.
+
+**What was done:**
+
+Step 1 — `download_data.py` now preserves the `source` column in `heart_disease.csv` instead of dropping it:
+```python
+# Before (wrong):
+combined = combined.drop(columns=['source'])
+combined.to_csv(csv_path, index=False)
+
+# After (correct):
+# Keep 'source' column so data_processing.py can restrict synthetic rows to train only
+combined.to_csv(csv_path, index=False)
+```
+
+Step 2 — `split_data()` in `data_processing.py` checks for the `source` column and separates real from synthetic before splitting:
+```python
+if 'source' in df.columns:
+    synthetic_mask = df['source'] == 'synthetic_ctgan'
+    synthetic_df = df[synthetic_mask].drop(columns=['source'])   # train only
+    real_df      = df[~synthetic_mask].drop(columns=['source'])  # split normally
+else:
+    real_df, synthetic_df = df, pd.DataFrame()  # backward-compatible fallback
+
+# Split only real data into train/val/test
+X_temp, X_test, y_temp, y_test = train_test_split(real_df.drop('target',axis=1), ...)
+X_train_real, X_val, ...       = train_test_split(X_temp, ...)
+
+# Append all synthetic rows to the real train portion only
+train_df = pd.concat([train_real_df, synthetic_df], ignore_index=True)
+```
+
+Val and test sets now contain only real clinical data. The fix is backward-compatible: if an older CSV without `source` is present, the original stratified split is used unchanged. A pipeline re-run (`scripts/download_data.py`) is required to activate the fix.
+
+**Files changed:** `scripts/download_data.py`, `src/data_processing.py`
+
+---
+
+### Gap 5 — No Way to Compare Across Multiple Predictions
+
+**What was wrong:**
+Each prediction replaced the previous one. If a user ran the assessment twice with different inputs (e.g. different ages or cholesterol levels) there was no way to review the first result alongside the second. The app had no memory within a session — navigating back would lose everything.
+
+**What was done:**
+Added an **in-session prediction history sidebar** that appears on the results page:
+
+- Every successful prediction is appended to `st.session_state.history` (list, max 10 entries, most recent first)
+- Each entry stores: timestamp, age, sex, risk level, risk percentage, full result dict, and patient inputs
+- On the results page a dark indigo sidebar renders each past prediction as a clickable button showing `[risk dot] HH:MM:SS  |  Age NNX  |  Risk Level NN%`
+- Clicking any entry loads that result back into `st.session_state.result` — no re-prediction needed
+- "New Assessment" navigates back to the form; "Clear History" wipes the log
+- The sidebar is hidden on the landing and form pages via conditional CSS injection, keeping those pages clean
+
+**Files changed:** `app.py` (session state init, submit handler, CSS, sidebar render block)

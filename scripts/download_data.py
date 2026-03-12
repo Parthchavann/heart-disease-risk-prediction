@@ -214,8 +214,7 @@ def download_uci_heart_disease_data() -> None:
         all_frames.append(synthetic_df)
 
     combined = pd.concat(all_frames, ignore_index=True)
-    combined = combined.drop(columns=['source'])
-
+    # Keep 'source' column so data_processing.py can restrict synthetic rows to train only
     combined.to_csv(csv_path, index=False)
 
     total = len(combined)
