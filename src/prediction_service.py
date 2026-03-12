@@ -18,6 +18,7 @@ from src.explainability import ModelExplainer
 from src.llm_layer import LLMExplanationGenerator
 from utils.validators import DataValidator
 from utils.constants import RiskLevel, FEATURE_NAMES
+from utils.metrics import MODEL_INFERENCE_HISTOGRAM
 
 logger = get_logger(__name__)
 
@@ -268,7 +269,8 @@ class HeartDiseasePredictionService:
                     'medical_disclaimer': settings.MEDICAL_DISCLAIMER
                 }
 
-            # Step 2: Preprocess input
+            # Step 2-4: Preprocess + predict + confidence (timed for Prometheus)
+            _t0 = __import__('time').perf_counter()
             X = self.preprocess_input(patient_data)
 
             # Step 3: Make prediction
@@ -277,6 +279,7 @@ class HeartDiseasePredictionService:
             # Step 4: Determine risk level and confidence interval
             risk_level = self._determine_risk_level(risk_probability)
             confidence_interval = self._calculate_confidence_interval(risk_probability, X)
+            MODEL_INFERENCE_HISTOGRAM.observe(__import__('time').perf_counter() - _t0)
 
             # Step 5: Build base result
             result = {

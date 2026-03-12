@@ -37,6 +37,7 @@ import requests
 from config.settings import settings
 from config.logging_config import get_logger
 from utils.constants import RiskLevel, RISK_FACTOR_EXPLANATIONS
+from utils.metrics import LLM_RESPONSE_HISTOGRAM
 
 logger = get_logger(__name__)
 
@@ -148,12 +149,17 @@ class LLMExplanationGenerator:
         temperature = temperature or settings.LLM_TEMPERATURE
 
         try:
+            _t0 = time.perf_counter()
             if self.provider == "ollama":
-                return self._request_ollama(prompt, max_tokens, temperature)
+                result = self._request_ollama(prompt, max_tokens, temperature)
             elif self.provider == "gemini":
-                return self._request_gemini(prompt)
+                result = self._request_gemini(prompt)
             elif self.provider == "openai":
-                return self._request_openai(prompt, max_tokens, temperature)
+                result = self._request_openai(prompt, max_tokens, temperature)
+            else:
+                result = self._generate_fallback_explanation(prompt)
+            LLM_RESPONSE_HISTOGRAM.observe(time.perf_counter() - _t0)
+            return result
         except Exception as e:
             logger.error(f"LLM request failed: {str(e)}")
 

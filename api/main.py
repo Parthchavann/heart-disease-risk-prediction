@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uvicorn
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from api.routes import health, prediction
 from api.middleware.error_handling import (
@@ -71,6 +72,9 @@ app = FastAPI(
     openapi_url="/openapi.json",
     lifespan=lifespan
 )
+
+# Prometheus instrumentation — auto-tracks request count + latency per endpoint
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # Add middleware
 app.add_middleware(

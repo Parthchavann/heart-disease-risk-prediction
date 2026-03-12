@@ -17,6 +17,7 @@ from src.prediction_service import HeartDiseasePredictionService
 from api.middleware.validation import validate_patient_data_ranges, sanitize_input_data
 from config.logging_config import get_logger
 from config.settings import settings
+from utils.metrics import PREDICTION_RISK_LEVEL_COUNTER
 
 logger = get_logger(__name__)
 
@@ -69,6 +70,10 @@ async def predict_heart_disease_risk(
         )
 
         logger.info(f"Prediction completed: {result['prediction_id']}")
+
+        # Track risk level distribution in Prometheus
+        if result.get("success") and result.get("risk_level"):
+            PREDICTION_RISK_LEVEL_COUNTER.labels(risk_level=result["risk_level"]).inc()
 
         # Convert to response model
         return PredictionResponse(**result)
