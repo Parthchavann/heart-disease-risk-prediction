@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from api.routes import health, prediction
+from api.routes import health, prediction, report
 from api.middleware.error_handling import (
     ErrorHandlingMiddleware,
     validation_exception_handler,
@@ -98,6 +98,7 @@ app.add_exception_handler(Exception, generic_exception_handler)
 # Include routers
 app.include_router(health.router)
 app.include_router(prediction.router)
+app.include_router(report.router)
 
 
 @app.get("/")
