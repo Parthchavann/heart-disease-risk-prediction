@@ -560,6 +560,86 @@ Write only the disclaimer text, no headings or labels.
 
         return comprehensive_explanation
 
+    def stream_risk_explanation(
+        self,
+        risk_probability: float,
+        risk_factors: List[Dict[str, Any]],
+        protective_factors: List[Dict[str, Any]],
+        recommendations: List[str],
+        doctor_questions: List[str],
+        patient_context: Dict[str, Any] = None,
+    ):
+        """Yield text chunks from the LLM explanation as a generator (for SSE streaming).
+
+        Falls back to yielding the full text in one chunk if streaming is not
+        supported by the active provider.
+        """
+        risk_level = self._determine_risk_level(risk_probability)
+
+        # Build a single combined prompt for all sections
+        rf_lines = "\n".join(
+            f"- {f.get('feature', '').replace('_', ' ')}: {round(float(f.get('feature_value', 0)), 2)}"
+            f" (impact: +{f.get('contribution', 0):.3f})"
+            for f in risk_factors[:4]
+        ) or "None identified"
+
+        pf_lines = "\n".join(
+            f"- {f.get('feature', '').replace('_', ' ')}: {round(float(f.get('feature_value', 0)), 2)}"
+            for f in protective_factors[:2]
+        ) or "None identified"
+
+        age = (patient_context or {}).get('age', '')
+        sex = ('male' if (patient_context or {}).get('sex') == 1
+               else 'female' if (patient_context or {}).get('sex') == 0 else '')
+        patient_line = f"{age}-year-old {sex}".strip() if age or sex else "patient"
+
+        prompt = (
+            f"{self._get_system_prompt()}\n\n"
+            f"Provide a warm, patient-friendly explanation for this {patient_line}.\n\n"
+            f"Risk level: {risk_level} ({risk_probability:.1%})\n\n"
+            f"Top risk factors:\n{rf_lines}\n\n"
+            f"Protective factors:\n{pf_lines}\n\n"
+            "Write 3-4 sentences explaining what this risk level means, why these specific "
+            "factors matter, and what the most important next steps are. Keep it reassuring, "
+            "specific, and avoid jargon. End with a reminder that this is educational only."
+        )
+
+        try:
+            if self.provider == "gemini" and self.client and not GEMINI_LEGACY:
+                for chunk in self.client.models.generate_content_stream(
+                    model=settings.LLM_MODEL, contents=prompt
+                ):
+                    if chunk.text:
+                        yield chunk.text
+                return
+
+            if self.provider == "ollama" and self.client:
+                full_text = self._request_ollama(
+                    prompt, settings.LLM_MAX_TOKENS, settings.LLM_TEMPERATURE
+                )
+                yield full_text
+                return
+
+            if self.provider == "openai" and self.client:
+                stream = self.client.chat.completions.create(
+                    model=settings.LLM_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=settings.LLM_MAX_TOKENS,
+                    temperature=settings.LLM_TEMPERATURE,
+                    stream=True,
+                )
+                for chunk in stream:
+                    delta = chunk.choices[0].delta.content
+                    if delta:
+                        yield delta
+                return
+
+        except Exception as e:
+            logger.error(f"Streaming LLM failed: {e}")
+
+        # Fallback — yield full text at once
+        yield self._generate_fallback_explanation(prompt)
+
     def save_explanation(self, explanation: Dict[str, Any], filename: str = None) -> str:
         """Save LLM explanation to file."""
 

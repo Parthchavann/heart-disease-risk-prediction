@@ -3,10 +3,12 @@ Prediction endpoints for heart disease risk assessment.
 """
 
 import asyncio
+import json
 import time
 import uuid
-from typing import List
+from typing import AsyncGenerator, List
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from datetime import datetime
 
 from api.models import (
@@ -205,6 +207,99 @@ async def predict_batch(
                f"{processing_time:.2f}s")
 
     return batch_response
+
+
+@router.post("/stream")
+async def predict_stream(
+    request: PredictionRequest,
+    service: HeartDiseasePredictionService = Depends(get_prediction_service)
+):
+    """
+    Streaming prediction endpoint using Server-Sent Events (SSE).
+
+    Emits three event types:
+      - {"type": "prediction", "data": {...}}  — risk score + SHAP (immediate)
+      - {"type": "text", "chunk": "..."}       — LLM explanation tokens
+      - {"type": "done"}                       — stream complete
+      - {"type": "error", "message": "..."}    — on failure
+    """
+    patient_data = request.patient_data.dict()
+
+    try:
+        from api.middleware.validation import validate_patient_data_ranges, sanitize_input_data
+        validate_patient_data_ranges(patient_data)
+        patient_data = sanitize_input_data(patient_data)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    async def event_stream() -> AsyncGenerator[str, None]:
+        try:
+            # Run prediction (without LLM — we stream that separately)
+            result = await asyncio.to_thread(
+                service.predict, patient_data, True, False
+            )
+
+            if not result.get("success"):
+                yield f"data: {json.dumps({'type': 'error', 'message': result.get('error', 'Prediction failed')})}\n\n"
+                return
+
+            # Emit prediction data immediately so the frontend can render the gauge
+            shap_exp = result.get("explanation") or {}
+            prediction_payload = {
+                "type": "prediction",
+                "data": {
+                    "prediction_id": result["prediction_id"],
+                    "risk_probability": result["risk_probability"],
+                    "risk_level": result["risk_level"],
+                    "confidence_interval": result.get("confidence_interval"),
+                    "model_info": result.get("model_info"),
+                    "explanation": shap_exp,
+                    "medical_disclaimer": result.get("medical_disclaimer", ""),
+                    "timestamp": result["timestamp"],
+                    "success": True,
+                },
+            }
+            yield f"data: {json.dumps(prediction_payload)}\n\n"
+
+            # Stream LLM explanation token-by-token
+            risk_factors = (shap_exp.get("top_risk_factors") or []) if isinstance(shap_exp, dict) else []
+            protective_factors = (shap_exp.get("top_protective_factors") or []) if isinstance(shap_exp, dict) else []
+
+            # Pre-generate recommendations + questions (fast, no streaming needed)
+            recs = await asyncio.to_thread(
+                service.llm_generator.generate_lifestyle_recommendations,
+                result["risk_probability"], risk_factors, patient_data
+            )
+            qs = await asyncio.to_thread(
+                service.llm_generator.generate_doctor_questions,
+                result["risk_probability"], risk_factors, patient_data
+            )
+
+            # Emit metadata before streaming text
+            yield f"data: {json.dumps({'type': 'meta', 'recommendations': recs, 'doctor_questions': qs})}\n\n"
+
+            # Stream explanation text
+            gen = service.llm_generator.stream_risk_explanation(
+                result["risk_probability"], risk_factors, protective_factors,
+                recs, qs, patient_data
+            )
+            for chunk in gen:
+                yield f"data: {json.dumps({'type': 'text', 'chunk': chunk})}\n\n"
+
+            yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+        except Exception as e:
+            logger.error(f"Streaming prediction failed: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Streaming failed. Please use /predict instead.'})}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # disable nginx buffering
+        },
+    )
 
 
 @router.get("/example")
