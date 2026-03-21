@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_DIR: str = "logs"
 
+    # CORS — comma-separated list of allowed origins, e.g. "https://your-app.lovable.app,https://your-app.railway.app"
+    ALLOWED_ORIGINS: str = "*"
+
     # Security
     SECRET_KEY: str = "your-secret-key-here"  # Change in production
 

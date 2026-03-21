@@ -77,9 +77,10 @@ app = FastAPI(
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # Add middleware
+_allowed_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

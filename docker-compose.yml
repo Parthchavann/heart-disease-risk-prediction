@@ -22,24 +22,6 @@ services:
       start_period: 120s
       retries: 3
 
-  streamlit:
-    build: .
-    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.headless=true
-    ports:
-      - "8501:8501"
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - API_URL=http://api:8000
-    volumes:
-      - model_data:/app/data
-      - logs:/app/logs
-    depends_on:
-      api:
-        condition: service_healthy
-    restart: unless-stopped
-
   prometheus:
     image: prom/prometheus:v2.51.0
     ports:
