@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 import uvicorn
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from api.routes import health, prediction, report
+from api.routes import health, prediction, report, auth
 from api.middleware.error_handling import (
     ErrorHandlingMiddleware,
     validation_exception_handler,
@@ -35,6 +35,9 @@ logger = get_logger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan management."""
     # Startup
+    from api.database import init_db
+    init_db()
+    logger.info("Database initialised")
     logger.info("Starting Heart Disease Risk Prediction API...")
     logger.info(f"API version: {settings.VERSION}")
     logger.info(f"Debug mode: {settings.DEBUG}")
@@ -99,6 +102,7 @@ app.add_exception_handler(Exception, generic_exception_handler)
 app.include_router(health.router)
 app.include_router(prediction.router)
 app.include_router(report.router)
+app.include_router(auth.router)
 
 
 @app.get("/")
