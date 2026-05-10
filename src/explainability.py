@@ -6,11 +6,18 @@ Provides SHAP-based explanations for model predictions.
 import os
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from typing import Dict, List, Any, Tuple, Optional, Union
 import joblib
 import json
+
+try:
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    PLOTTING_AVAILABLE = True
+except ImportError:
+    plt = None
+    sns = None
+    PLOTTING_AVAILABLE = False
 
 # SHAP imports
 try:
@@ -225,6 +232,9 @@ class ModelExplainer:
         if shap_values is None:
             raise ValueError("No SHAP values available")
 
+        if not PLOTTING_AVAILABLE:
+            return ""
+
         plt.figure(figsize=(10, 8))
         shap.summary_plot(
             shap_values, X[:len(shap_values)],
@@ -246,6 +256,9 @@ class ModelExplainer:
 
         if self.explainer is None:
             raise ValueError("Explainer not initialized. Call initialize_explainer first.")
+
+        if not PLOTTING_AVAILABLE:
+            return ""
 
         plt.figure(figsize=(10, 8))
 
@@ -293,6 +306,9 @@ class ModelExplainer:
 
         # Get top N features
         top_features = dict(list(feature_importance.items())[:top_n])
+
+        if not PLOTTING_AVAILABLE:
+            return ""
 
         plt.figure(figsize=(10, 6))
         features = list(top_features.keys())
