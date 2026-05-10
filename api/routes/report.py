@@ -97,23 +97,60 @@ class ExtractedReport(BaseModel):
     file_type: str
 
 
+def _extract_pdf_text(file_bytes: bytes) -> str:
+    """Extract plain text from PDF bytes using pdfplumber."""
+    import tempfile, os
+    try:
+        import pdfplumber
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
+        try:
+            with pdfplumber.open(tmp_path) as pdf:
+                return "\n".join(page.extract_text() or "" for page in pdf.pages)
+        finally:
+            os.unlink(tmp_path)
+    except ImportError:
+        return ""
+
+
 def _call_gemini_vision(file_bytes: bytes, mime_type: str) -> dict:
-    """Call Gemini Vision API to extract medical values from file."""
+    """Call Gemini to extract medical values from file."""
+    import tempfile, os
+
     try:
         from google import genai
         from google.genai import types as genai_types
 
         client = genai.Client(api_key=settings.GEMINI_API_KEY)
 
-        part = genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+        if mime_type == "application/pdf":
+            # Try text extraction first (no vision quota cost)
+            pdf_text = _extract_pdf_text(file_bytes)
+            if pdf_text.strip():
+                contents = [f"Medical report text:\n\n{pdf_text}\n\n{EXTRACTION_PROMPT}"]
+            else:
+                # Fallback: upload via Files API for scanned/image PDFs
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(file_bytes)
+                    tmp_path = tmp.name
+                try:
+                    uploaded = client.files.upload(file=tmp_path)
+                    part = genai_types.Part.from_uri(file_uri=uploaded.uri, mime_type=mime_type)
+                    contents = [part, EXTRACTION_PROMPT]
+                finally:
+                    os.unlink(tmp_path)
+        else:
+            # Images — inline bytes
+            part = genai_types.Part.from_bytes(data=file_bytes, mime_type=mime_type)
+            contents = [part, EXTRACTION_PROMPT]
 
         response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=[part, EXTRACTION_PROMPT],
+            model="gemini-flash-lite-latest",
+            contents=contents,
         )
 
         raw = response.text.strip()
-        # Strip markdown code fences if present
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):

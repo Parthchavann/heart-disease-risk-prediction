@@ -739,3 +739,133 @@ Added an **in-session prediction history sidebar** that appears on the results p
 - The sidebar is hidden on the landing and form pages via conditional CSS injection, keeping those pages clean
 
 **Files changed:** `app.py` (session state init, submit handler, CSS, sidebar render block)
+
+---
+
+## 🚀 Phase 8 — Lovable Frontend Integration + Feature Expansion
+
+### Architecture Change
+Streamlit frontend (`app.py`) replaced by **React/Vite/TypeScript Lovable frontend** (`semantic-resume-ranker-pro` repo). The FastAPI backend now serves as a pure API layer consumed by the React SPA.
+
+- Streamlit removed from `docker-compose.yml` and `requirements.txt`
+- CORS updated: `allow_origins` now reads from `ALLOWED_ORIGINS` env var (comma-separated list), defaults to `"*"` for dev
+- Frontend hardcoded URL → `import.meta.env.VITE_API_BASE_URL` with localhost fallback
+
+---
+
+### Feature 1 — Medical Report Upload & Auto-fill (PLANNED)
+
+**What it does:**
+User uploads a blood test PDF, lab report image (JPG/PNG), or ECG scan. Gemini Vision (multimodal) reads the document and extracts relevant clinical values, which are then used to auto-fill the assessment form.
+
+**Backend:**
+- New endpoint: `POST /report/extract` — accepts `multipart/form-data` (PDF or image, max 10MB)
+- Gemini 1.5 Flash reads the file natively (no OCR library needed)
+- Returns JSON matching `PatientDataRequest` fields + `extracted_fields` list + `confidence` per field
+- Files are never saved to disk — processed in memory only (privacy-first)
+
+**Frontend:**
+- "Import from medical report" button on Assessment page
+- File picker (PDF/JPG/PNG), upload progress, then form auto-fills with extracted values
+- Extracted fields highlighted in blue so user knows what was detected vs manually entered
+- User reviews and corrects before submitting
+
+**Extractable fields by report type:**
+
+| Report type | Fields |
+|-------------|--------|
+| Blood panel | `chol`, `fbs` |
+| BP reading | `trestbps` |
+| ECG report | `restecg`, `slope`, `oldpeak` |
+| Cardiac imaging | `ca` |
+| Thalassemia report | `thal` |
+
+**Files:** `api/routes/report.py`, `api/main.py` (register router)
+
+---
+
+### Feature 2 — LLM Streaming (PLANNED)
+
+**What it does:**
+Instead of waiting 5-30s for the full Gemini response, the API streams tokens as server-sent events (SSE). The frontend displays text word-by-word as it's generated (typewriter effect).
+
+**Backend:**
+- New endpoint: `POST /predict/stream` — returns `StreamingResponse` with `text/event-stream`
+- First SSE event: `{"type": "prediction", "data": {risk_probability, risk_level, confidence_interval, explanation}}`
+- Subsequent events: `{"type": "text", "chunk": "..."}` (LLM tokens)
+- Final event: `{"type": "done"}`
+- Uses Gemini `generate_content_stream` under the hood
+
+**Frontend:**
+- Results page uses `EventSource` / `fetch` with `ReadableStream`
+- Risk gauge and SHAP bars appear immediately (from first event)
+- LLM explanation section shows typewriter animation
+- Fallback: if browser doesn't support SSE, falls back to `POST /predict/`
+
+**Files:** `api/routes/prediction.py` (new `/stream` route), `src/llm_layer.py` (streaming generator method)
+
+---
+
+### Feature 3 — What-If Simulator (PLANNED)
+
+**What it does:**
+On the results page, sliders for the top modifiable risk factors (cholesterol, blood pressure, heart rate, ST depression, age). Moving a slider re-calls `POST /predict` with the modified value and animates the gauge to the new risk score in real time.
+
+**Frontend only** — no backend changes needed.
+
+**Implementation:**
+- After initial prediction, extract top modifiable features from SHAP `risk_factors`
+- Render sliders with current value as default, clinical range as min/max
+- Debounced re-prediction (300ms) on slider change
+- Side-by-side display: original vs current risk %, delta indicator (↑↓)
+
+**Files:** `src/pages/Results.tsx` (frontend repo)
+
+---
+
+### Feature 4 — PDF Report Download (PLANNED)
+
+**What it does:**
+One button on the results page generates a clean PDF with: risk gauge, SHAP bar chart, LLM explanation, lifestyle recommendations, doctor questions, and medical disclaimer. Patient can print or hand to doctor.
+
+**Frontend only** — uses `jsPDF` + `html2canvas`. No new backend endpoint.
+
+**Files:** `src/pages/Results.tsx` (frontend repo), `package.json` (add `jspdf`, `html2canvas`)
+
+---
+
+### Feature 5 — User Auth + Persistent History (PLANNED)
+
+**What it does:**
+Users register/login with email + password. All predictions saved to SQLite DB per user. History persists across sessions and shows a trend chart of risk % over time.
+
+**Backend:**
+- New endpoints: `POST /auth/register`, `POST /auth/login` → returns JWT token
+- New endpoint: `GET /predictions/history` (authenticated, returns last 50 predictions)
+- SQLite DB via SQLAlchemy: `users` table + `predictions` table
+- JWT with 30-day expiry (`python-jose`, `passlib[bcrypt]`)
+
+**Frontend:**
+- Login/register modal (triggered from top-right avatar icon)
+- History page: table of past assessments with date, age, risk level, risk %
+- Trend line chart (Recharts) showing risk % over time
+- If not logged in: session-only history (existing behaviour)
+
+**New dependencies:**
+- Backend: `python-jose[cryptography]`, `passlib[bcrypt]`, `sqlalchemy`
+- Frontend: `jspdf`, `html2canvas` (for PDF)
+
+**Files:** `api/routes/auth.py`, `api/models_db.py`, `api/database.py`, `api/main.py`
+
+---
+
+### Build Order
+1. [x] Lovable frontend cloned + CORS wired + Streamlit removed
+2. [ ] Medical report upload (backend + frontend)
+3. [ ] LLM streaming (backend + frontend)
+4. [ ] What-If Simulator (frontend only)
+5. [ ] PDF download (frontend only)
+6. [ ] Auth + persistent history (backend + frontend)
+
+
+**Files changed:** `app.py` (session state init, submit handler, CSS, sidebar render block)
