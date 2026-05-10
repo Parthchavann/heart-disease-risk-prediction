@@ -1,4 +1,4 @@
-# Core ML/Data
+# Production dependencies only (no training/data-gen packages)
 pandas>=1.5.0
 numpy>=1.24.0
 scikit-learn>=1.2.0
@@ -7,51 +7,34 @@ lightgbm>=3.3.0
 catboost>=1.2.0
 shap>=0.41.0
 imbalanced-learn>=0.10.0
-optuna>=3.0.0
 
-# Synthetic data
-sdv>=1.0.0
-ctgan>=0.6.0
-
-# API/Web
+# API
 fastapi>=0.100.0
 uvicorn>=0.23.0
 pydantic>=2.0.0
+pydantic-settings>=2.0.0
 httpx>=0.24.0
+python-multipart>=0.0.6
 
-# LLM Integration
-openai>=1.0.0
-tiktoken>=0.4.0
+# LLM
 google-genai>=1.0.0
+openai>=1.0.0
 
-# Caching
+# Caching & monitoring
 cachetools>=5.3.0
-
-# Monitoring
 prometheus-fastapi-instrumentator>=6.1.0
 prometheus-client>=0.19.0
 
-# Auth & Database
+# Auth & DB
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4
 sqlalchemy>=2.0.0
 
-# Image processing (medical report upload)
+# File handling
 Pillow>=10.0.0
 aiofiles>=23.1.0
 
 # Utilities
 python-dotenv>=1.0.0
 joblib>=1.3.0
-python-multipart>=0.0.6
 requests>=2.31.0
-
-# Visualization
-matplotlib>=3.7.0
-seaborn>=0.12.0
-
-# Development
-pytest>=7.4.0
-black>=23.7.0
-flake8>=6.0.0
-mypy>=1.5.0
