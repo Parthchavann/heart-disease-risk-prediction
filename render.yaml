@@ -1,22 +1,28 @@
 services:
   - type: web
     name: heart-disease-api
-    runtime: docker
-    dockerfilePath: ./Dockerfile
-    startCommand: ./startup.sh
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      - key: PYTHONPATH
+        value: /opt/render/project/src
       - key: LLM_PROVIDER
         value: gemini
       - key: LLM_MODEL
-        value: gemini-1.5-flash
+        value: models/gemini-flash-lite-latest
       - key: GEMINI_API_KEY
-        sync: false   # set manually in Render dashboard
+        sync: false
+      - key: SECRET_KEY
+        value: hd-risk-prod-2026-xK9mP3qR7nL2wZ5
+      - key: ALLOWED_ORIGINS
+        value: "*"
       - key: DEBUG
         value: "false"
       - key: LOG_LEVEL
         value: INFO
     disk:
       name: model-data
-      mountPath: /app/data
+      mountPath: /opt/render/project/src/data
       sizeGB: 1
