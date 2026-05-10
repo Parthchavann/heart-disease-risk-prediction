@@ -103,6 +103,9 @@ dmypy.json
 logs/
 data/models/*.pkl
 data/models/*.joblib
+# Allow production model only
+!data/models/best_model.pkl
+!data/models/best_model_metadata.json
 .DS_Store
 *.log
 
