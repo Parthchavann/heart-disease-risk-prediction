@@ -47,42 +47,56 @@ heart-disease-risk-prediction/
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### 1. Clone & Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/Parthchavann/heart-disease-risk-prediction.git
 cd heart-disease-risk-prediction
-
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Train the Model
+### 2. Configure Environment
 
 ```bash
-# Download data, process, and train models
-python scripts/train_model.py
+cp .env.example .env
 ```
 
-This will:
-- Download the UCI Heart Disease dataset
-- Clean and preprocess the data
-- Train multiple ML models with hyperparameter tuning
-- Select the best performing model
-- Save the trained model and metadata
-
-### 3. Run the API
+Open `.env` and set your Gemini API key (free at [aistudio.google.com](https://aistudio.google.com)):
 
 ```bash
-# Start the FastAPI server
-python api/main.py
+GEMINI_API_KEY=your_gemini_api_key_here
+LLM_PROVIDER=gemini
+LLM_MODEL=models/gemini-flash-lite-latest
+SECRET_KEY=change-this-to-a-random-string
 ```
 
-The API will be available at:
-- **API Documentation**: http://localhost:8000/docs
+> No model training needed — the pre-trained model is included in the repo.
+
+### 3. Start the Backend API
+
+```bash
+# Windows
+set PYTHONPATH=. && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+# Mac/Linux
+PYTHONPATH=. uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+- **API Docs**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
-- **Prediction Endpoint**: http://localhost:8000/predict
+
+### 4. Start the Frontend (React/Vite)
+
+The frontend lives in a separate repo:
+
+```bash
+git clone https://github.com/Parthchavann/semantic-resume-ranker-pro.git
+cd semantic-resume-ranker-pro
+npm install
+npm run dev
+```
+
+Open http://localhost:5173 — the frontend connects to the backend automatically.
 
 ### 4. Make Predictions
 
@@ -142,11 +156,15 @@ The system trains multiple models and selects the best performer:
 - **Decision Tree**: Simple interpretable model
 - **SVM**: Support vector machine
 
-Typical performance metrics:
-- **Accuracy**: 80-85%
-- **ROC-AUC**: 85-92%
-- **Precision**: 80-85%
-- **Recall**: 80-85%
+Best model: **Stacking Ensemble** (trained on 2,690 samples — UCI + Statlog + CTGAN synthetic)
+
+| Metric | Score |
+|--------|-------|
+| ROC-AUC | 0.9407 |
+| Accuracy | 84.9% |
+| Sensitivity | 82.1% |
+| Specificity | 88.1% |
+| F1-Score | 85.3% |
 
 ## 🔍 Explainability Features
 
@@ -235,25 +253,15 @@ Typical performance metrics:
 ## 🔧 Configuration
 
 ### Environment Variables
-Create a `.env` file:
 
-```bash
-# API Configuration
-API_HOST=0.0.0.0
-API_PORT=8000
-DEBUG=false
-
-# LLM Configuration
-OPENAI_API_KEY=your_openai_key_here
-LLM_MODEL=gpt-4
-LLM_TEMPERATURE=0.3
-
-# Logging
-LOG_LEVEL=INFO
-
-# Security
-SECRET_KEY=your-secret-key-here
-```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GEMINI_API_KEY` | Yes | Get free at [aistudio.google.com](https://aistudio.google.com) |
+| `LLM_PROVIDER` | No | `gemini` (default) or `openai` |
+| `LLM_MODEL` | No | `models/gemini-flash-lite-latest` |
+| `SECRET_KEY` | Yes | Random string for JWT auth |
+| `API_PORT` | No | Default: `8000` |
+| `ALLOWED_ORIGINS` | No | CORS origins, default: `*` |
 
 ### Settings
 Modify `config/settings.py` for:
