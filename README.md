@@ -75,15 +75,15 @@ SECRET_KEY=change-this-to-a-random-string
 ### 3. Start the Backend API
 
 ```bash
-# Windows
-set PYTHONPATH=. && uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-
-# Mac/Linux
-PYTHONPATH=. uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+python run.py
 ```
+
+That's it — no need to set `PYTHONPATH` manually.
 
 - **API Docs**: http://localhost:8000/docs
 - **Health Check**: http://localhost:8000/health
+
+> **No Gemini key?** Predictions still work — you just won't get the AI explanation text.
 
 ### 4. Start the Frontend (React/Vite)
 
